@@ -70,24 +70,18 @@ runtime ships with macOS). It's deliberately light: a single status item, a
 ~5-minute poll (plus on-demand refresh when you open the menu) with rate-limit
 backoff, and ephemeral network requests.
 
-## Run on your other Macs
+## First run
 
-The built `.app` is portable — AirDrop it over, or clone this repo and run
-`./build.sh` there. Two things to know on each Mac:
-
-1. **Claude Code must be signed in** on that Mac. The app refreshes the token
-   itself when it expires, so it keeps working even when Claude Code isn't running.
-2. **First launch / Gatekeeper.** The app is ad-hoc signed, not notarized, so a
-   copied bundle may be quarantined. Clear it once (or right-click → **Open**):
-   ```sh
-   xattr -dr com.apple.quarantine "/Applications/Claude Usage.app"
-   ```
-   `build.sh --install` does this for you.
-3. **Keychain prompt.** The first time it reads the token, macOS asks for
-   permission — click **Always Allow**.
-
-> Tip: if you can't see it in the menu bar, a menu-bar manager (Bartender, Ice, …)
-> may be hiding it. Reveal the hidden section and ⌘-drag the item where you want it.
+- **Keychain prompt.** The first time it reads the token, macOS asks for
+  permission — click **Always Allow**.
+- **Gatekeeper.** If you copied a *pre-built* `.app` from elsewhere
+  (AirDrop/download) it may be quarantined; clear it once (or right-click →
+  **Open**). `build.sh --install` already does this:
+  ```sh
+  xattr -dr com.apple.quarantine "/Applications/Claude Usage.app"
+  ```
+- **Can't see it?** A menu-bar manager (Bartender, Ice, …) may be hiding it —
+  reveal the hidden section and ⌘-drag the item where you want it.
 
 ## How it works
 
