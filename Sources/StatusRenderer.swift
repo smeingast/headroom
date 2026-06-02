@@ -71,6 +71,7 @@ enum StatusRenderer {
                       style: DisplayStyle, color mode: ColorMode, font: NSFont) {
         if style == .percentages {
             button.image = nil
+            button.imagePosition = .noImage
             button.attributedTitle = percentText(five, week, mode, font)
         } else {
             button.attributedTitle = NSAttributedString(string: "")

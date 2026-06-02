@@ -74,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusLine.isEnabled = false
         menu.addItem(statusLine)
 
-        addAction(to: menu, title: "Refresh Now", key: "r", action: #selector(refreshNow))
+        addAction(to: menu, title: "Refresh Now", key: "r", action: #selector(refreshNowClicked))
 
         menu.addItem(.separator())
 
@@ -122,12 +122,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func systemDidWake() { refreshNow() }
 
-    @objc private func refreshNow() {
-        let now = Date()
-        guard !isFetching,
-              now >= cooldownUntil,
-              now >= lastFetchAt.addingTimeInterval(minFetchGap) else { return }
+    // Timer / wake / menu-open: respect the gates (gap + 429 cooldown).
+    @objc private func refreshNow() { performFetch(force: false) }
+    // The explicit "Refresh Now" menu item: always fetch, bypassing the gates.
+    @objc private func refreshNowClicked() { performFetch(force: true) }
 
+    private func performFetch(force: Bool) {
+        guard !isFetching else { return }
+        let now = Date()
+        if !force {
+            guard now >= cooldownUntil,
+                  now >= lastFetchAt.addingTimeInterval(minFetchGap) else { return }
+        }
         isFetching = true
         lastFetchAt = now
         Task { @MainActor in
@@ -158,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // No data yet. Only flag auth problems loudly; rate-limit / network
             // hiccups show a calm "…" since we retry automatically.
             button.image = nil
+            button.imagePosition = .noImage
             button.attributedTitle = NSAttributedString(string: needsAuth ? "⚠" : "…", attributes: [
                 .font: barFont,
                 .foregroundColor: needsAuth ? NSColor.systemRed : NSColor.secondaryLabelColor,
