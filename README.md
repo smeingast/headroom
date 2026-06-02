@@ -1,20 +1,28 @@
-# Claude Usage (menu bar)
+<p align="center">
+  <img src="assets/icon.png" width="120" height="120" alt="Claude Usage icon">
+</p>
 
-A tiny native macOS menu-bar app that shows your current Claude usage as
-**5-hour / weekly** utilization, e.g. `14% / 4%`.
+<h1 align="center">Claude Usage</h1>
+
+<p align="center">
+  A tiny native macOS menu-bar app that shows your current Claude usage as
+  <b>5-hour</b> and <b>weekly</b> utilization.
+</p>
 
 It reads the OAuth token Claude Code already stores in your login Keychain and
 polls the same usage data that powers Claude Code's `/usage` command. No servers,
 no accounts, no config files, no telemetry — it talks only to Anthropic.
 
 ```
-Menu bar:   14% / 4%        (text turns orange ≥70%, red ≥90%)
+Menu bar:   ◍   ← concentric rings (default), or 14% / 4%, bars, gauges, …
 
 Dropdown:   5-hour limit — 14%  ·  resets 17:40
             Weekly limit —  4%  ·  resets Sun 03:00
             ─────────────
             Updated 14:26
             Refresh Now
+            Display Style  ▸   Concentric rings · Percentages · Bars · …
+            Color          ▸   Thresholds · Monochrome · Heatmap · Accent
             ✓ Launch at Login
               Show Dock Icon
             ─────────────
@@ -26,6 +34,21 @@ Dropdown:   5-hour limit — 14%  ·  resets 17:40
 > change or break without notice. It reads your local Claude Code OAuth token from
 > the Keychain and sends requests only to `api.anthropic.com` /
 > `console.anthropic.com`. Use at your own risk.
+
+## Display styles & color
+
+Choose how the two values look from the **Display Style** menu — from the
+icon-style concentric rings (default; outer = 5-hour, inner = weekly) to
+percentages, bars, twin rings, gauges, pie slices, or segments:
+
+![Display styles](assets/styles.png)
+
+The **Color** menu controls how usage maps to color:
+
+- **Thresholds** (default) — normal, orange ≥ 70 %, red ≥ 90 %
+- **Monochrome** — adapts to the menu bar (light / dark)
+- **Heatmap** — green → red as usage climbs
+- **System accent** — your macOS accent color
 
 ## Requirements
 
@@ -71,25 +94,27 @@ The built `.app` is portable — AirDrop it over, or clone this repo and run
 |-------|--------|
 | Data source | `GET /api/oauth/usage` → `five_hour.utilization`, `seven_day.utilization` (plus model-specific weekly caps when in use) |
 | Auth | OAuth token from Keychain service `Claude Code-credentials`; auto-refreshed via the stored refresh token |
-| Display | `NSStatusItem` text with monospaced digits and color thresholds |
+| Display | `NSStatusItem` rendered as text or a drawn glyph — 7 styles × 4 color modes |
 | Footprint | Menu-bar only (`LSUIElement`); optional Dock icon; launch-at-login via a per-user LaunchAgent |
 
 ## Project layout
 
 ```
 Sources/
-  main.swift          App entry + single-instance guard
-  AppDelegate.swift   Status item, menu, polling, rendering
-  UsageClient.swift   Usage fetch + token refresh
-  Keychain.swift      Read/write the shared Claude Code credentials
-  LoginItem.swift     Launch-at-login via LaunchAgent
+  main.swift           App entry + single-instance guard
+  AppDelegate.swift    Status item, menu, polling
+  StatusRenderer.swift Display styles + color modes (text / drawn glyphs)
+  UsageClient.swift    Usage fetch + token refresh
+  Keychain.swift       Read/write the shared Claude Code credentials
+  LoginItem.swift      Launch-at-login via LaunchAgent
 Resources/
-  Info.plist          Bundle manifest (LSUIElement = menu-bar only)
-  AppIcon.icns        App icon
+  Info.plist           Bundle manifest (LSUIElement = menu-bar only)
+  AppIcon.icns         App icon
+assets/                README images (icon, styles strip)
 tools/
-  icongen/main.swift  Renders the icon
-  make_icon.sh        Builds AppIcon.icns
-build.sh              Compile → bundle → sign (→ install)
+  icongen/main.swift   Renders the icon
+  make_icon.sh         Builds AppIcon.icns
+build.sh               Compile → bundle → sign (→ install)
 ```
 
 ## License

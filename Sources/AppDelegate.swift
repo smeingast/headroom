@@ -10,10 +10,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Back off this long after the server rate-limits us (HTTP 429).
     private let rateLimitCooldown: TimeInterval = 120
 
-    // Color thresholds (percent) for the menu bar text.
-    private let warnAt = 70.0
-    private let dangerAt = 90.0
-
     private let client = UsageClient()
     private var statusItem: NSStatusItem!
     private var timer: Timer?
@@ -77,6 +73,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(statusLine)
 
         addAction(to: menu, title: "Refresh Now", key: "r", action: #selector(refreshNow))
+
+        menu.addItem(.separator())
+
+        let styleRoot = NSMenuItem(title: "Display Style", action: nil, keyEquivalent: "")
+        styleRoot.submenu = buildStyleMenu()
+        menu.addItem(styleRoot)
+
+        let colorRoot = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
+        colorRoot.submenu = buildColorMenu()
+        menu.addItem(colorRoot)
 
         loginToggle.action = #selector(toggleLoginItem)
         loginToggle.target = self
@@ -145,17 +151,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         guard let snap = snapshot else {
             // No data yet: show a placeholder, or a warning glyph if we failed.
+            button.image = nil
             let text = lastError == nil ? "…" : "⚠"
-            button.attributedTitle = attributed(text, color: lastError == nil ? nil : .systemRed)
+            button.attributedTitle = NSAttributedString(string: text, attributes: [
+                .font: barFont,
+                .foregroundColor: lastError == nil ? NSColor.labelColor : NSColor.systemRed,
+            ])
             button.toolTip = lastError
             return
         }
 
-        let five = snap.fiveHour?.utilization
-        let week = snap.sevenDay?.utilization
-        let text = "\(percent(five)) / \(percent(week))"
-        let worst = max(five ?? 0, week ?? 0)
-        button.attributedTitle = attributed(text, color: color(for: worst))
+        StatusRenderer.apply(to: button,
+                             five: snap.fiveHour?.utilization,
+                             week: snap.sevenDay?.utilization,
+                             style: Settings.style,
+                             color: Settings.colorMode,
+                             font: barFont)
         button.toolTip = tooltip(snap)
     }
 
@@ -217,23 +228,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dockToggle.state = show ? .on : .off
     }
 
+    // MARK: - Display settings
+
+    private func buildStyleMenu() -> NSMenu {
+        let m = NSMenu()
+        for s in DisplayStyle.allCases {
+            let it = NSMenuItem(title: s.title, action: #selector(selectStyle(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = s.rawValue
+            it.state = (s == Settings.style) ? .on : .off
+            it.image = StatusRenderer.previewImage(for: s)
+            m.addItem(it)
+        }
+        return m
+    }
+
+    private func buildColorMenu() -> NSMenu {
+        let m = NSMenu()
+        for c in ColorMode.allCases {
+            let it = NSMenuItem(title: c.title, action: #selector(selectColor(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = c.rawValue
+            it.state = (c == Settings.colorMode) ? .on : .off
+            m.addItem(it)
+        }
+        return m
+    }
+
+    @objc private func selectStyle(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let s = DisplayStyle(rawValue: raw) else { return }
+        Settings.style = s
+        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
+        renderBar()
+    }
+
+    @objc private func selectColor(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let c = ColorMode(rawValue: raw) else { return }
+        Settings.colorMode = c
+        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
+        renderBar()
+    }
+
     // MARK: - Formatting helpers
 
     private func percent(_ v: Double?) -> String {
         guard let v else { return "—" }
         return "\(Int(v.rounded()))%"
-    }
-
-    private func color(for util: Double) -> NSColor? {
-        if util >= dangerAt { return .systemRed }
-        if util >= warnAt { return .systemOrange }
-        return nil                          // nil = default adaptive menu-bar color
-    }
-
-    private func attributed(_ text: String, color: NSColor?) -> NSAttributedString {
-        var attrs: [NSAttributedString.Key: Any] = [.font: barFont]
-        if let color { attrs[.foregroundColor] = color }
-        return NSAttributedString(string: text, attributes: attrs)
     }
 
     private func resetText(_ date: Date?, weekly: Bool) -> String? {
