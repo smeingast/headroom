@@ -70,6 +70,12 @@ runtime ships with macOS). It's deliberately light: a single status item, a
 ~5-minute poll (plus on-demand refresh when you open the menu) with rate-limit
 backoff, and ephemeral network requests.
 
+**Stable signing (optional).** The build is ad-hoc signed by default, which ties
+the Keychain *Always Allow* grant to that exact build — so macOS re-asks after
+every rebuild. Run `./tools/make_signing_cert.sh` once to create a self-signed
+code-signing identity; `build.sh` then uses it automatically and the grant
+persists across rebuilds.
+
 ## First run
 
 - **Keychain prompt.** The first time it reads the token, macOS asks for
@@ -109,6 +115,7 @@ assets/                README images (icon, styles strip)
 tools/
   icongen/main.swift   Renders the icon
   make_icon.sh         Builds AppIcon.icns
+  make_signing_cert.sh Optional stable signing identity (see Build)
 build.sh               Compile → bundle → sign (→ install)
 ```
 
