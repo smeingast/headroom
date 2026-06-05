@@ -58,10 +58,21 @@ The **Color** menu controls how usage maps to color:
 - To build: the Swift toolchain (Xcode, or Command Line Tools via
   `xcode-select --install`).
 
-## Build
+## Install
+
+### Download (recommended)
+
+Grab the latest **notarized** build from the
+[Releases page](https://github.com/smeingast/claude-usage/releases/latest), unzip,
+and drag **Claude Usage.app** to `/Applications`. It's signed with a Developer ID
+and notarized by Apple, so it opens with no Gatekeeper warning.
+
+### Build from source
+
+Needs the Swift toolchain (Xcode, or Command Line Tools via `xcode-select --install`):
 
 ```sh
-./build.sh              # → build/Claude Usage.app
+./build.sh              # → build/Claude Usage.app  (ad-hoc signed)
 ./build.sh --install    # also copies to /Applications and clears quarantine
 ```
 
@@ -70,22 +81,28 @@ runtime ships with macOS). It's deliberately light: a single status item, a
 ~5-minute poll (plus on-demand refresh when you open the menu) with rate-limit
 backoff, and ephemeral network requests.
 
-**Stable signing (optional).** The build is ad-hoc signed by default, which ties
-the Keychain *Always Allow* grant to that exact build — so macOS re-asks after
-every rebuild. Run `./tools/make_signing_cert.sh` once to create a self-signed
-code-signing identity; `build.sh` then uses it automatically and the grant
-persists across rebuilds.
+<details>
+<summary><b>Maintainer: cutting a notarized release</b></summary>
+
+With a **Developer ID Application** certificate installed, `build.sh` automatically
+signs with a hardened runtime. To produce the notarized, stapled `.app` for the
+Releases page:
+
+```sh
+./tools/notarize_setup.sh   # one-time: store Apple notary credentials in the keychain
+./build.sh --notarize       # sign → submit to Apple → staple → verify
+```
+
+`notarize_setup.sh` needs an **app-specific password** (account.apple.com →
+Sign-In and Security). Your Apple ID and Team ID live only in the keychain and
+never touch the repo.
+</details>
 
 ## First run
 
 - **Keychain prompt.** The first time it reads the token, macOS asks for
-  permission — click **Always Allow**.
-- **Gatekeeper.** If you copied a *pre-built* `.app` from elsewhere
-  (AirDrop/download) it may be quarantined; clear it once (or right-click →
-  **Open**). `build.sh --install` already does this:
-  ```sh
-  xattr -dr com.apple.quarantine "/Applications/Claude Usage.app"
-  ```
+  permission — click **Always Allow**. (It asks once more the first time it writes a
+  refreshed token back — also **Always Allow**.)
 - **Can't see it?** A menu-bar manager (Bartender, Ice, …) may be hiding it —
   reveal the hidden section and ⌘-drag the item where you want it.
 
@@ -115,8 +132,8 @@ assets/                README images (icon, styles strip)
 tools/
   icongen/main.swift   Renders the icon
   make_icon.sh         Builds AppIcon.icns
-  make_signing_cert.sh Optional stable signing identity (see Build)
-build.sh               Compile → bundle → sign (→ install)
+  notarize_setup.sh    One-time: store Apple notary credentials (see Install)
+build.sh               Compile → bundle → sign → (notarize) → (install)
 ```
 
 ## License

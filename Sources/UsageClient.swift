@@ -120,8 +120,16 @@ final class UsageClient {
             throw UsageError.transport(error.localizedDescription)
         }
         guard let http = resp as? HTTPURLResponse else { throw UsageError.transport("no response") }
-        guard http.statusCode == 200, let tr = try? JSONDecoder().decode(TokenDTO.self, from: data) else {
-            throw UsageError.auth
+        // Only a genuine token rejection should raise the loud "sign in" warning.
+        // 429 / 5xx are transient: surface them as .http so the menu bar stays calm
+        // ("…") and we simply retry, instead of falsely claiming the user is logged out.
+        switch http.statusCode {
+        case 200:            break
+        case 429, 500...599: throw UsageError.http(http.statusCode)
+        default:             throw UsageError.auth
+        }
+        guard let tr = try? JSONDecoder().decode(TokenDTO.self, from: data) else {
+            throw UsageError.decode
         }
 
         var updated = creds

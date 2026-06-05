@@ -34,8 +34,9 @@ DerivedData/
 .vscode/
 .idea/
 
-# ───── Claude Code (local, per-machine settings) ─────
-.claude/settings.local.json
+# ───── Claude Code (local, per-machine state: settings, locks, etc.) ─────
+.claude/
 
 # ───── Local-only notes (personal / session context) ─────
 session-notes.md
+important-notes.md
