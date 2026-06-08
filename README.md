@@ -19,6 +19,10 @@ Menu bar:   ◍   concentric rings (default), or 14% / 4%, bars, gauges, ...
 Dropdown:   5-hour limit — 14%  ·  resets 17:40
             Weekly limit —  4%  ·  resets Sun 03:00
             ─────────────
+            2 active sessions
+              claude-usage  ·  Opus  ·  Busy  ·  125K ctx
+              vircampype    ·  Opus  ·  Idle  ·  535K ctx
+            ─────────────
             Updated 14:26
             Refresh Now
             Display Style  ▸   Concentric rings · Percentages · Bars · ...
@@ -111,6 +115,7 @@ never touch the repo.
 |-------|--------|
 | Data source | `GET /api/oauth/usage`: `five_hour.utilization`, `seven_day.utilization` (plus model-specific weekly caps when in use) |
 | Auth | OAuth token from Keychain service `Claude Code-credentials`, auto-refreshed via the stored refresh token |
+| Active sessions | Live Claude Code sessions **on this Mac** — project, model, status, and context tokens — read from `~/.claude/sessions/*.json` and each session's transcript tail. Local only, no network; undocumented internal state, so liable to change between CLI versions |
 | Display | `NSStatusItem` rendered as text or a drawn glyph: 7 styles × 5 color modes |
 | Footprint | Menu-bar only (`LSUIElement`); optional Dock icon; launch-at-login via `SMAppService` |
 

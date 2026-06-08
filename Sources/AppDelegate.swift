@@ -40,6 +40,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let loginToggle = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
     private let dockToggle = NSMenuItem(title: "Show Dock Icon", action: nil, keyEquivalent: "")
 
+    // Active local Claude Code sessions (read from ~/.claude). Pre-allocated, hidden
+    // menu rows we fill in place — mutating title/isHidden is safe while the menu is
+    // open; structurally inserting rows would not be. maxSessionRows caps the display;
+    // the header still reports the true count and the last slot absorbs any overflow.
+    private static let maxSessionRows = 8
+    private let sessionsClient = SessionsClient()
+    private var sessions: [SessionInfo] = []
+    private var isReadingSessions = false
+    private var lastSessionsReadAt = Date.distantPast
+    private let sessionsMinGap: TimeInterval = 2
+    private let sessionsHeader = NSMenuItem()
+    private var sessionRowItems: [NSMenuItem] = []
+    private let sessionsSeparator = NSMenuItem.separator()
+
     private let barFont = NSFont.monospacedDigitSystemFont(
         ofSize: NSFont.systemFontSize, weight: .regular)
 
@@ -82,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         startTimer()
         refreshNow()
+        refreshSessions(force: true)
     }
 
     // MARK: - Menu
@@ -99,6 +114,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sonnetItem.isHidden = true
 
         menu.addItem(.separator())
+
+        // Active-sessions section: header + fixed row slots + trailing separator.
+        sessionsHeader.isEnabled = false
+        sessionsHeader.title = "Sessions…"
+        menu.addItem(sessionsHeader)
+        for _ in 0..<Self.maxSessionRows {
+            let it = NSMenuItem()
+            it.isEnabled = false
+            it.isHidden = true
+            sessionRowItems.append(it)
+            menu.addItem(it)
+        }
+        menu.addItem(sessionsSeparator)
 
         statusLine.isEnabled = false
         menu.addItem(statusLine)
@@ -140,21 +168,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item)
     }
 
+    // Lay out the session rows from the in-memory cache *before* the menu is shown,
+    // so the count/visibility is always correctly laid out on open. The async read
+    // kicked from menuWillOpen only refreshes the cache for next time.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        renderSessions()
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
         refreshNow()                        // freshen on open (gated by minFetchGap)
+        refreshSessions()                   // re-read local sessions (gated by sessionsMinGap)
     }
 
     // MARK: - Fetching
 
     private func startTimer() {
         let t = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshNow() }
+            Task { @MainActor in
+                self?.refreshNow()
+                self?.refreshSessions()
+            }
         }
         t.tolerance = 15                    // let the OS coalesce wakeups
         timer = t
     }
 
-    @objc private func systemDidWake() { refreshNow() }
+    @objc private func systemDidWake() { refreshNow(); refreshSessions() }
 
     // Timer / wake / menu-open: respect the gates (gap + 429 cooldown).
     @objc private func refreshNow() { performFetch(force: false) }
@@ -192,6 +231,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             renderBar()
             renderMenu()
+        }
+    }
+
+    // Re-read the local session registry off the main actor (pure file I/O), then
+    // update the menu rows on the main actor. Gated by sessionsMinGap to coalesce
+    // rapid menu opens; force bypasses the gate (initial load).
+    private func refreshSessions(force: Bool = false) {
+        guard !isReadingSessions else { return }
+        let now = Date()
+        if !force, now < lastSessionsReadAt.addingTimeInterval(sessionsMinGap) { return }
+        isReadingSessions = true
+        lastSessionsReadAt = now
+        let client = sessionsClient
+        Task.detached(priority: .utility) {
+            let list = client.fetch()
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.sessions = list
+                self.isReadingSessions = false
+                self.renderSessions()
+            }
         }
     }
 
@@ -278,6 +338,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var s = "\(label) — \(percent(window.utilization))"
         if let reset = resetText(window.resetsAt, weekly: weekly) { s += "  ·  \(reset)" }
         return s
+    }
+
+    /// Fill the pre-allocated session rows in place (title / isHidden only — safe
+    /// while the menu is open). The header carries the true count even when more
+    /// sessions exist than visible slots; the last slot then absorbs the overflow.
+    private func renderSessions() {
+        let list = sessions
+        if list.isEmpty {
+            sessionsHeader.title = "No active Claude sessions"
+            for it in sessionRowItems { it.isHidden = true }
+            return
+        }
+        sessionsHeader.title = list.count == 1 ? "1 active session" : "\(list.count) active sessions"
+
+        let cap = Self.maxSessionRows
+        let overflow = list.count > cap
+        let realRows = overflow ? cap - 1 : list.count
+        for (i, it) in sessionRowItems.enumerated() {
+            if i < realRows {
+                it.title = sessionRow(list[i])
+                it.isHidden = false
+            } else if overflow, i == realRows {
+                it.title = "  + \(list.count - realRows) more"
+                it.isHidden = false
+            } else {
+                it.isHidden = true
+            }
+        }
+    }
+
+    /// "  project  ·  Opus  ·  Busy  ·  56K ctx"
+    private func sessionRow(_ s: SessionInfo) -> String {
+        var parts = [s.projectName]
+        if let m = s.shortModel { parts.append(m) }
+        parts.append(s.status.capitalized)
+        parts.append(contextLabel(s.contextTokens))
+        return "  " + parts.joined(separator: "  ·  ")
+    }
+
+    /// Compact token count: "—", "512 ctx", "5.6K ctx", "56K ctx", "463K ctx".
+    private func contextLabel(_ tokens: Int?) -> String {
+        guard let t = tokens else { return "—" }
+        if t < 1000 { return "\(t) ctx" }
+        let k = Double(t) / 1000
+        let s = k < 10 ? String(format: "%.1f", k) : String(Int(k.rounded()))
+        return "\(s)K ctx"
     }
 
     // MARK: - Toggles
