@@ -54,6 +54,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var sessionRowItems: [NSMenuItem] = []
     private let sessionsSeparator = NSMenuItem.separator()
 
+    // Usage-history graph: a passive custom-view row above the status line, fed from a
+    // persisted local sample store. See HistoryStore / HistoryGraphView.
+    private let historyStore = HistoryStore()
+    private var history: [HistorySample] = []
+    private let graphView = HistoryGraphView(frame: NSRect(x: 0, y: 0, width: 240, height: 56))
+    private let graphItem = NSMenuItem()
+    private let graphSeparator = NSMenuItem.separator()
+    private let historyMaxAge: TimeInterval = 32 * 24 * 3600   // 30d largest range + 2d margin
+    private let minSampleGap: TimeInterval = 240               // keep the ~5-min grid even when "Refresh Now" bypasses the fetch gate
+    private var lastHistoryAppendAt = Date.distantPast
+
     private let barFont = NSFont.monospacedDigitSystemFont(
         ofSize: NSFont.systemFontSize, weight: .regular)
 
@@ -94,6 +105,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Task { @MainActor in self?.appearanceDidChange() }
         }
 
+        // Prime the usage history off the main actor FIRST, so the disk read (fast) sets
+        // lastHistoryAppendAt before the network fetch below can record a too-close sample.
+        // MERGE (do not overwrite) so a fetch that still lands first is preserved; trim disk.
+        let store = historyStore
+        let maxAge = historyMaxAge
+        Task.detached(priority: .utility) {
+            let loaded = store.load(maxAge: maxAge)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.history = self.mergeHistory(loaded, self.history)
+                if let last = self.history.last?.t {
+                    self.lastHistoryAppendAt = max(self.lastHistoryAppendAt, last)
+                }
+                self.applyGraphData()
+            }
+            store.trim(maxAge: maxAge)
+        }
+
         startTimer()
         refreshNow()
         refreshSessions(force: true)
@@ -128,6 +157,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.addItem(sessionsSeparator)
 
+        // Usage-history graph row (passive custom view) just above the status line.
+        graphItem.isEnabled = false
+        graphItem.view = graphView
+        menu.addItem(graphItem)
+        menu.addItem(graphSeparator)
+
         statusLine.isEnabled = false
         menu.addItem(statusLine)
 
@@ -142,6 +177,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let colorRoot = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
         colorRoot.submenu = buildColorMenu()
         menu.addItem(colorRoot)
+
+        let rangeRoot = NSMenuItem(title: "History Range", action: nil, keyEquivalent: "")
+        rangeRoot.submenu = buildRangeMenu()
+        menu.addItem(rangeRoot)
+
+        let graphRoot = NSMenuItem(title: "Graph", action: nil, keyEquivalent: "")
+        graphRoot.submenu = buildGraphModeMenu()
+        menu.addItem(graphRoot)
 
         loginToggle.action = #selector(toggleLoginItem)
         loginToggle.target = self
@@ -173,6 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // kicked from menuWillOpen only refreshes the cache for next time.
     func menuNeedsUpdate(_ menu: NSMenu) {
         renderSessions()
+        applyGraphData()        // the actual menu-open layout path; renderMenu() is not called on open
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -216,6 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 snapshot = try await client.fetch()
                 lastError = nil
                 needsAuth = false
+                recordHistory(snapshot)
             } catch let e as UsageError {
                 lastError = e.description
                 if case .auth = e { needsAuth = true } else { needsAuth = false }
@@ -321,6 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             weeklyItem.title = "Weekly limit — …"
             statusLine.title = lastError ?? "Loading…"
         }
+        applyGraphData()        // refresh the graph row when a fetch lands
     }
 
     /// Model-specific weekly caps only appear when actually in use.
@@ -448,6 +494,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Settings.colorMode = c
         sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
         renderBar()
+        applyGraphData()        // the graph follows the color mode too
+    }
+
+    private func buildRangeMenu() -> NSMenu {
+        let m = NSMenu()
+        for r in HistoryRange.allCases {
+            let it = NSMenuItem(title: r.title, action: #selector(selectRange(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = r.rawValue
+            it.state = (r == Settings.historyRange) ? .on : .off
+            m.addItem(it)
+        }
+        return m
+    }
+
+    private func buildGraphModeMenu() -> NSMenu {
+        let m = NSMenu()
+        for g in GraphMode.allCases {
+            let it = NSMenuItem(title: g.title, action: #selector(selectGraphMode(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = g.rawValue
+            it.state = (g == Settings.graphMode) ? .on : .off
+            m.addItem(it)
+        }
+        return m
+    }
+
+    @objc private func selectRange(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let r = HistoryRange(rawValue: raw) else { return }
+        Settings.historyRange = r
+        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
+        applyGraphData()
+    }
+
+    @objc private func selectGraphMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let g = GraphMode(rawValue: raw) else { return }
+        Settings.graphMode = g
+        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
+        applyGraphData()
+    }
+
+    // MARK: - Usage history
+
+    /// Record a sample from a successful fetch: throttle to the ~5-min grid (Refresh
+    /// Now bypasses the fetch gate), append in memory + persist off-main.
+    private func recordHistory(_ snap: UsageSnapshot?) {
+        guard let snap else { return }
+        let sample = HistorySample(
+            t: snap.fetchedAt,
+            five: snap.fiveHour?.utilization,
+            week: snap.sevenDay?.utilization,
+            fiveResetsAt: snap.fiveHour?.resetsAt,
+            weekResetsAt: snap.sevenDay?.resetsAt)
+        guard sample.t.timeIntervalSince(lastHistoryAppendAt) >= minSampleGap else { return }
+        lastHistoryAppendAt = sample.t
+        history.append(sample)
+        trimHistoryInMemory()
+        let store = historyStore
+        Task.detached(priority: .utility) { store.append(sample) }
+    }
+
+    /// Build the windowed GraphData from the in-memory buffer and hand it to the view. Cheap
+    /// (a slice); the view skips the redraw when nothing meaningful changed.
+    private func applyGraphData() {
+        let now = Date()
+        let cutoff = now.addingTimeInterval(-Settings.historyRange.duration)
+        let sliced = history.filter { $0.t >= cutoff }
+        graphView.update(GraphData(
+            samples: sliced,
+            mode: Settings.graphMode,
+            range: Settings.historyRange,
+            colorMode: Settings.colorMode,
+            now: now,
+            fiveNow: snapshot?.fiveHour?.utilization,
+            weekNow: snapshot?.sevenDay?.utilization))
+    }
+
+    /// Merge two sample lists, de-duplicating by whole-second timestamp (`b` wins), sorted.
+    private func mergeHistory(_ a: [HistorySample], _ b: [HistorySample]) -> [HistorySample] {
+        var byT: [Int: HistorySample] = [:]
+        for s in a { byT[Int(s.t.timeIntervalSince1970.rounded())] = s }
+        for s in b { byT[Int(s.t.timeIntervalSince1970.rounded())] = s }
+        return byT.values.sorted { $0.t < $1.t }
+    }
+
+    private func trimHistoryInMemory() {
+        let cutoff = Date().addingTimeInterval(-historyMaxAge)
+        if let first = history.first?.t, first < cutoff {
+            history.removeAll { $0.t < cutoff }
+        }
     }
 
     // MARK: - Formatting helpers

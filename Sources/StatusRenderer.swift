@@ -32,7 +32,44 @@ enum ColorMode: String, CaseIterable {
     }
 }
 
-/// Persisted user choices (UserDefaults). Defaults: concentric rings, Claude coral.
+/// Time span shown by the usage-history graph. Sub-hour spans are omitted: the 300 s
+/// poll yields one point every 5 minutes, so anything shorter is too sparse to plot.
+enum HistoryRange: String, CaseIterable {
+    case last5h, last24h, last7d, last30d
+
+    var title: String {
+        switch self {
+        case .last5h:  return "Last 5h"
+        case .last24h: return "Last 24h"
+        case .last7d:  return "Last 7d"
+        case .last30d: return "Last 30d"
+        }
+    }
+
+    var duration: TimeInterval {
+        switch self {
+        case .last5h:  return 5 * 3600
+        case .last24h: return 24 * 3600
+        case .last7d:  return 7 * 24 * 3600
+        case .last30d: return 30 * 24 * 3600
+        }
+    }
+}
+
+/// How the history graph plots the two utilization series.
+enum GraphMode: String, CaseIterable {
+    case utilization, rate
+
+    var title: String {
+        switch self {
+        case .utilization: return "Utilization"
+        case .rate:        return "Consumption rate"
+        }
+    }
+}
+
+/// Persisted user choices (UserDefaults). Defaults: concentric rings, Claude coral,
+/// 24-hour utilization graph.
 enum Settings {
     private static let d = UserDefaults.standard
 
@@ -43,6 +80,14 @@ enum Settings {
     static var colorMode: ColorMode {
         get { ColorMode(rawValue: d.string(forKey: "colorMode") ?? "") ?? .claude }
         set { d.set(newValue.rawValue, forKey: "colorMode") }
+    }
+    static var historyRange: HistoryRange {
+        get { HistoryRange(rawValue: d.string(forKey: "historyRange") ?? "") ?? .last24h }
+        set { d.set(newValue.rawValue, forKey: "historyRange") }
+    }
+    static var graphMode: GraphMode {
+        get { GraphMode(rawValue: d.string(forKey: "graphMode") ?? "") ?? .utilization }
+        set { d.set(newValue.rawValue, forKey: "graphMode") }
     }
 }
 
