@@ -23,10 +23,14 @@ Dropdown:   5-hour limit — 14%  ·  resets 17:40
               claude-usage  ·  Opus  ·  Busy  ·  125K ctx
               vircampype    ·  Opus  ·  Idle  ·  535K ctx
             ─────────────
+            ▁▂▄▆█▇▅▃  ▁▁▂▂▃   usage history (5h + weekly)
+            ─────────────
             Updated 14:26
             Refresh Now
             Display Style  ▸   Concentric rings · Percentages · Bars · ...
             Color          ▸   Claude · Thresholds · Monochrome · Heatmap · ...
+            History Range  ▸   Last 5h · Last 24h · Last 7d · Last 30d
+            Graph          ▸   Utilization · Consumption rate
             ✓ Launch at Login
               Show Dock Icon
             ─────────────
@@ -54,6 +58,14 @@ The **Color** menu controls how usage maps to color:
 - **Thresholds**: normal, orange ≥ 70 %, red ≥ 90 %
 - **Heatmap**: green to red as usage climbs
 - **System accent**: your macOS accent color
+
+## Usage history
+
+The dropdown also draws an inline graph of past usage. Two views from the **Graph**
+menu: **Utilization** (the rings unrolled over time, 5-hour and weekly) and
+**Consumption rate** (how fast each window is filling). Choose the span from
+**History Range**: last 5h, 24h, 7d, or 30d. Samples are kept locally in a small
+append-only file and trimmed after about a month, so nothing leaves your Mac.
 
 ## Requirements
 
@@ -116,6 +128,7 @@ never touch the repo.
 | Data source | `GET /api/oauth/usage`: `five_hour.utilization`, `seven_day.utilization` (plus model-specific weekly caps when in use) |
 | Auth | OAuth token shared with Claude Code (Keychain service `Claude Code-credentials`), read silently and cached in memory. The token is refreshed only as a last resort and **never while any Claude Code process is running** — the refresh token is single-use, so spending it would log a live Claude Code out. While one runs, the app adopts whatever fresh token Claude Code writes |
 | Active sessions | Live Claude Code sessions **on this Mac** — project, model, status, and context tokens — read from `~/.claude/sessions/*.json` and each session's transcript tail. Local only, no network; undocumented internal state, so liable to change between CLI versions |
+| Usage history | Inline graph of past 5-hour and weekly utilization (or fill rate), spanning the last 5h to 30d. Sampled on each successful poll into an append-only file under Application Support, trimmed to about 32 days. Local only |
 | Display | `NSStatusItem` rendered as text or a drawn glyph: 7 styles × 5 color modes |
 | Footprint | Menu-bar only (`LSUIElement`); optional Dock icon; launch-at-login via `SMAppService` |
 
