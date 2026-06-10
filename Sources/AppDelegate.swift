@@ -82,6 +82,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let f = DateFormatter(); f.locale = .current; f.dateFormat = "HH:mm"; return f
     }()
 
+    func applicationWillTerminate(_ notification: Notification) {
+        client.flushPendingWriteBack()   // never leave the Keychain holding a dead pair
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.font = barFont
@@ -256,8 +260,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lastFetchAt = now
         Task { @MainActor in
             defer { isFetching = false }
+            // Token rotation is only safe while NO local Claude Code is alive (a
+            // running one holds the single-use refresh token in memory and gets
+            // logged out if we spend it). Checked fresh per fetch, off the main
+            // actor; "Refresh Now" bypasses the time gates but never this.
+            let sessions = sessionsClient
+            let claudeAlive = await Task.detached(priority: .utility) { sessions.anyClaudeAlive() }.value
             do {
-                snapshot = try await client.fetch()
+                snapshot = try await client.fetch(allowRefresh: !claudeAlive,
+                                                  isClaudeAlive: { sessions.anyClaudeAlive() })
                 lastError = nil
                 needsAuth = false
                 recordHistory(snapshot)

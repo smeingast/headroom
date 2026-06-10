@@ -103,9 +103,9 @@ never touch the repo.
 
 ## First run
 
-- **Keychain prompt.** The first time it reads the token, macOS asks for
-  permission. Click **Always Allow**. (It asks once more the first time it writes a
-  refreshed token back, also **Always Allow**.)
+- **Keychain prompt: normally none.** The app reads the shared credentials the
+  same way Claude Code itself does, which macOS allows silently. If macOS ever
+  does ask (unusual setups), click **Always Allow** once.
 - **Can't see it?** A menu-bar manager (Bartender, Ice, and similar) may be hiding
   it. Reveal the hidden section and ⌘-drag the item where you want it.
 
@@ -114,7 +114,7 @@ never touch the repo.
 | Piece | Detail |
 |-------|--------|
 | Data source | `GET /api/oauth/usage`: `five_hour.utilization`, `seven_day.utilization` (plus model-specific weekly caps when in use) |
-| Auth | OAuth token from Keychain service `Claude Code-credentials`, auto-refreshed via the stored refresh token |
+| Auth | OAuth token shared with Claude Code (Keychain service `Claude Code-credentials`), read silently and cached in memory. The token is refreshed only as a last resort and **never while any Claude Code process is running** — the refresh token is single-use, so spending it would log a live Claude Code out. While one runs, the app adopts whatever fresh token Claude Code writes |
 | Active sessions | Live Claude Code sessions **on this Mac** — project, model, status, and context tokens — read from `~/.claude/sessions/*.json` and each session's transcript tail. Local only, no network; undocumented internal state, so liable to change between CLI versions |
 | Display | `NSStatusItem` rendered as text or a drawn glyph: 7 styles × 5 color modes |
 | Footprint | Menu-bar only (`LSUIElement`); optional Dock icon; launch-at-login via `SMAppService` |

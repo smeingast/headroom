@@ -72,6 +72,52 @@ struct SessionsClient: Sendable {
         return out
     }
 
+    /// True if ANY local Claude Code process is plausibly alive. This gates token
+    /// rotation (see UsageClient): rotating the single-use refresh token while a
+    /// Claude Code holds the old one in memory forces the user to /login again.
+    /// Two layers, deliberately erring toward true — a false "alive" only delays a
+    /// usage fetch, a false "dead" can log the user out:
+    /// - the session registry (interactive sessions), liveness-checked but without
+    ///   the transcript reads `fetch()` does, and
+    /// - a process-table scan for anything literally named "claude", which also
+    ///   catches headless `claude -p` runs that never join the registry.
+    func anyClaudeAlive() -> Bool {
+        let fm = FileManager.default
+        if let files = try? fm.contentsOfDirectory(at: sessionsDir, includingPropertiesForKeys: nil) {
+            for file in files where file.pathExtension == "json" {
+                guard let data = try? Data(contentsOf: file),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let pid = (obj["pid"] as? NSNumber)?.int32Value
+                else { continue }
+                let startedAtMs = (obj["startedAt"] as? NSNumber)?.doubleValue
+                if isAlive(pid), isSameProcess(pid: pid, startedAtMs: startedAtMs) { return true }
+            }
+        }
+        return anyProcessNamed("claude")
+    }
+
+    /// Scan the kernel process table for an exact (case-sensitive) p_comm match.
+    /// "claude" is the CLI binary in every install mode; the desktop app is
+    /// "Claude" and does not share these credentials. On any sysctl failure,
+    /// report true — the conservative answer for the rotation gate.
+    private func anyProcessNamed(_ name: String) -> Bool {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0, size > 0 else { return true }
+        let stride = MemoryLayout<kinfo_proc>.stride
+        var procs = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 16)
+        size = procs.count * stride
+        guard sysctl(&mib, u_int(mib.count), &procs, &size, nil, 0) == 0 else { return true }
+        for i in 0..<(size / stride) {
+            let match = withUnsafeBytes(of: procs[i].kp_proc.p_comm) { raw -> Bool in
+                guard let base = raw.baseAddress else { return false }
+                return strncmp(base.assumingMemoryBound(to: CChar.self), name, raw.count) == 0
+            }
+            if match { return true }
+        }
+        return false
+    }
+
     // MARK: - Liveness
 
     /// True if `pid` is a running process. `kill(pid, 0)` sends no signal: it
