@@ -37,11 +37,15 @@ final class HistoryGraphView: NSView {
     /// enough that a single slightly-late poll does not fragment the line.
     private let gapTolerance: TimeInterval = 12 * 60
 
+    // Templates, not literal formats: the axis hour follows the user's 12/24-hour
+    // clock preference, and the day label follows the locale's month/day order.
     private static let hmFormatter: DateFormatter = {
-        let f = DateFormatter(); f.locale = .current; f.dateFormat = "HH:mm"; return f
+        let f = DateFormatter(); f.locale = .current
+        f.setLocalizedDateFormatFromTemplate("jmm"); return f
     }()
     private static let dayFormatter: DateFormatter = {
-        let f = DateFormatter(); f.locale = .current; f.dateFormat = "MMM d"; return f
+        let f = DateFormatter(); f.locale = .current
+        f.setLocalizedDateFormatFromTemplate("MMMd"); return f
     }()
 
     override init(frame: NSRect) {

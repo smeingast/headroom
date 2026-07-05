@@ -110,8 +110,12 @@ enum Keychain {
     /// Preflight for a token rotation: prove we can persist BEFORE spending the
     /// single-use refresh token. Rewrites the item with its own current bytes —
     /// a no-op for the content, but it exercises the exact write path. (Inherent
-    /// residual: a writer landing between the read and the rewrite is reverted;
-    /// the window is sub-millisecond and the final write-back is compare-guarded.)
+    /// residual: a writer landing between the read and the rewrite is reverted
+    /// with no conflict detection — this is the one unguarded write in the app.
+    /// The window is sub-millisecond, and the write-back that follows a real
+    /// rotation IS compare-guarded, but it cannot repair a revert that happened
+    /// here. Accepted: closing it would need a Keychain compare-and-swap, which
+    /// does not exist.)
     /// A missing item must surface as `notFound` (signed out), not as "can't
     /// write" — the two need opposite UI treatment.
     static func canWrite() throws -> Bool {

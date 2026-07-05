@@ -38,6 +38,15 @@ enum LoginItem {
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: key) else { return }
         defaults.set(true, forKey: key)
+        // Upgrades from pre-SMAppService builds carry no marker, and a user who
+        // had deliberately turned launch-at-login OFF there left no plist either
+        // (disable() deleted it) — indistinguishable from a fresh install by the
+        // marker alone. Any pre-existing app preference identifies such an
+        // upgrade, so respect the off state; users who had it ON were already
+        // re-registered by migrateLegacyAgentIfNeeded. (A legacy user who never
+        // touched any setting still gets the default — no signal to go on.)
+        let preexisting = ["displayStyle", "colorMode", "historyRange", "graphMode", "showDockIcon"]
+        guard !preexisting.contains(where: { defaults.object(forKey: $0) != nil }) else { return }
         setEnabled(true)
     }
 

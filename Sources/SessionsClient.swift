@@ -18,13 +18,22 @@ struct SessionInfo: Sendable {
         return base.isEmpty ? cwd : base
     }
 
-    /// "Opus" / "Sonnet" / "Haiku", else the raw model id.
+    /// The model family, short: "Opus" / "Sonnet" / "Haiku" / "Fable" / … For an
+    /// unknown family, derive it from the id ("claude-zephyr-5" → "Zephyr") so a
+    /// future model never widens the menu with a raw model id; the raw id is the
+    /// last resort only when nothing in the id looks like a family name.
     var shortModel: String? {
         guard let m = model else { return nil }
         let lower = m.lowercased()
-        if lower.contains("opus")   { return "Opus" }
-        if lower.contains("sonnet") { return "Sonnet" }
-        if lower.contains("haiku")  { return "Haiku" }
+        for family in ["opus", "sonnet", "haiku", "fable", "mythos"] where lower.contains(family) {
+            return family.prefix(1).uppercased() + family.dropFirst()
+        }
+        let stem = lower.hasPrefix("claude-") ? lower.dropFirst(7) : lower[...]
+        if let family = stem.split(separator: "-")
+            .first(where: { $0.count >= 3 && $0.allSatisfy(\.isLetter) }) {
+            let f = String(family)
+            return f.prefix(1).uppercased() + f.dropFirst()
+        }
         return m
     }
 }
@@ -96,9 +105,11 @@ struct SessionsClient: Sendable {
         return anyProcessNamed("claude")
     }
 
-    /// Scan the kernel process table for an exact (case-sensitive) p_comm match.
-    /// "claude" is the CLI binary in every install mode; the desktop app is
-    /// "Claude" and does not share these credentials. On any sysctl failure,
+    /// Scan the kernel process table for the CLI. An exact (case-sensitive)
+    /// p_comm match catches native-binary installs ("claude"; the desktop app is
+    /// "Claude" and does not share these credentials). npm installs are a
+    /// #!-script, so their p_comm is the INTERPRETER — for those, check the argv
+    /// of every node/bun process for a "claude" entry. On any sysctl failure,
     /// report true — the conservative answer for the rotation gate.
     private func anyProcessNamed(_ name: String) -> Bool {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
@@ -108,12 +119,48 @@ struct SessionsClient: Sendable {
         var procs = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 16)
         size = procs.count * stride
         guard sysctl(&mib, u_int(mib.count), &procs, &size, nil, 0) == 0 else { return true }
-        for i in 0..<(size / stride) {
-            let match = withUnsafeBytes(of: procs[i].kp_proc.p_comm) { raw -> Bool in
+        func commEquals(_ i: Int, _ s: String) -> Bool {
+            withUnsafeBytes(of: procs[i].kp_proc.p_comm) { raw -> Bool in
                 guard let base = raw.baseAddress else { return false }
-                return strncmp(base.assumingMemoryBound(to: CChar.self), name, raw.count) == 0
+                return strncmp(base.assumingMemoryBound(to: CChar.self), s, raw.count) == 0
             }
-            if match { return true }
+        }
+        var interpreters: [Int32] = []
+        for i in 0..<(size / stride) {
+            if commEquals(i, name) { return true }
+            if commEquals(i, "node") || commEquals(i, "bun") {
+                interpreters.append(procs[i].kp_proc.p_pid)
+            }
+        }
+        for pid in interpreters where argvHasBasename(name, pid: pid) { return true }
+        return false
+    }
+
+    /// True when one of the first few argv strings of `pid` has `name` as its
+    /// last path component — the npm CLI shows up as "node …/bin/claude".
+    /// KERN_PROCARGS2 layout: argc (Int32), the exec path, NUL padding, then the
+    /// argv strings; only same-user processes are readable, which is exactly the
+    /// population that shares our Keychain item. Failure means "can't tell" →
+    /// false: the p_comm layers above keep their own conservative defaults, and
+    /// erring true here would permanently block rotation on any Mac that runs an
+    /// unrelated node process we cannot inspect.
+    private func argvHasBasename(_ name: String, pid: Int32) -> Bool {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        let intSize = MemoryLayout<Int32>.size
+        var size = 0
+        guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0, size > intSize else { return false }
+        var buf = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, u_int(mib.count), &buf, &size, nil, 0) == 0, size > intSize else { return false }
+        var i = intSize
+        var seen = 0
+        while i < size, seen < 4 {                      // exec path + argv[0...2]
+            while i < size, buf[i] == 0 { i += 1 }      // skip the NUL padding runs
+            guard i < size else { break }
+            let start = i
+            while i < size, buf[i] != 0 { i += 1 }
+            let s = String(decoding: buf[start..<i], as: UTF8.self)
+            if (s as NSString).lastPathComponent == name { return true }
+            seen += 1
         }
         return false
     }

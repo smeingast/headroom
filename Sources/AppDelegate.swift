@@ -64,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let historyMaxAge: TimeInterval = 32 * 24 * 3600   // 30d largest range + 2d margin
     private let minSampleGap: TimeInterval = 240               // keep the ~5-min grid even when "Refresh Now" bypasses the fetch gate
     private var lastHistoryAppendAt = Date.distantPast
+    private var lastDiskTrimAt = Date()                        // launch task trims; recordHistory re-trims ~daily
 
     private let barFont = NSFont.monospacedDigitSystemFont(
         ofSize: NSFont.systemFontSize, weight: .regular)
@@ -72,14 +73,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // costly, and these run on every menu render. Safe to share — all use is on the
     // main actor. Locale is captured at first use, fine for a login-launched menu-bar
     // app (a mid-session locale change is picked up on the next launch).
+    // Templates (not literal formats) so the hour respects the user's 12/24-hour
+    // clock preference: "jmm" renders as "HH:mm" or "h:mm a" per locale.
     private static let updatedFormatter: DateFormatter = {
-        let f = DateFormatter(); f.locale = .current; f.dateFormat = "HH:mm"; return f
+        let f = DateFormatter(); f.locale = .current
+        f.setLocalizedDateFormatFromTemplate("jmm"); return f
     }()
     private static let weeklyResetFormatter: DateFormatter = {
-        let f = DateFormatter(); f.locale = .current; f.dateFormat = "EEE HH:mm"; return f
+        let f = DateFormatter(); f.locale = .current
+        f.setLocalizedDateFormatFromTemplate("EEEjmm"); return f
     }()
     private static let dailyResetFormatter: DateFormatter = {
-        let f = DateFormatter(); f.locale = .current; f.dateFormat = "HH:mm"; return f
+        let f = DateFormatter(); f.locale = .current
+        f.setLocalizedDateFormatFromTemplate("jmm"); return f
     }()
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -564,6 +570,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         trimHistoryInMemory()
         let store = historyStore
         Task.detached(priority: .utility) { store.append(sample) }
+        // Keep the on-disk file bounded across long uptimes too — without this,
+        // trim only ran at launch and the file grew (~17 KB/day) until a relaunch.
+        if sample.t.timeIntervalSince(lastDiskTrimAt) > 24 * 3600 {
+            lastDiskTrimAt = sample.t
+            let maxAge = historyMaxAge
+            Task.detached(priority: .utility) { store.trim(maxAge: maxAge) }
+        }
     }
 
     /// Build the windowed GraphData from the in-memory buffer and hand it to the view. Cheap

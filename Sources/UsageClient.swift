@@ -63,6 +63,12 @@ final class UsageClient {
     // persisting on every poll, and never drop it on the floor.
     private var pendingWriteBack: OAuthCredentials?
     private var pendingRotatedFrom: String?
+    // When WE last spent a refresh token (server accepted the POST). Guards the
+    // pathological loop where the usage endpoint persistently rejects a perfectly
+    // fresh token for non-token reasons (403 on entitlement / policy / headers):
+    // without it, every poll would spend one rotation against the token endpoint.
+    private var lastRotationAt = Date.distantPast
+    private let rotationRetryGap: TimeInterval = 1800
 
     private let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
@@ -112,6 +118,15 @@ final class UsageClient {
                 }
             }
             guard allowRefresh else { throw UsageError.stale }
+            // A pair we rotated moments ago and that is nowhere near expiry will
+            // not be fixed by rotating again — the rejection is about the account
+            // or the request, not token freshness. Surface the auth state instead
+            // of spending a refresh per poll. (First-ever rejection of a stored,
+            // unexpired token still refreshes: lastRotationAt is distantPast.)
+            if !isExpired(current),
+               Date().timeIntervalSince(lastRotationAt) < rotationRetryGap {
+                throw UsageError.auth
+            }
             let rotated = try await refreshAndPersist(current, isClaudeAlive: isClaudeAlive)
             return try await getUsage(token: rotated.accessToken)
         }
@@ -267,6 +282,9 @@ final class UsageClient {
             }
             throw UsageError.auth
         }
+        // The 200 means the old refresh token is spent server-side from here on,
+        // whatever happens to the response body.
+        lastRotationAt = Date()
         guard let tr = try? JSONDecoder().decode(TokenDTO.self, from: data) else {
             throw UsageError.decode
         }
@@ -301,6 +319,16 @@ final class UsageClient {
             }
             pendingWriteBack = nil
             pendingRotatedFrom = nil
+        } catch KeychainError.notFound {
+            // The item vanished while we held a rotated pair: the user signed
+            // out. Definitive, same contract as freshFromKeychain - there is no
+            // item left to persist into, so parking would pin the app in calm
+            // staleness forever. Drop the pair and reset; the next poll re-reads
+            // the Keychain and surfaces the loud auth state.
+            creds = nil
+            pendingWriteBack = nil
+            pendingRotatedFrom = nil
+            NSLog("ClaudeUsage: Keychain item disappeared during write-back — treating as signed out")
         } catch {
             pendingWriteBack = updated
             pendingRotatedFrom = rotatedFrom
