@@ -36,6 +36,20 @@ struct SessionInfo: Sendable {
         }
         return m
     }
+
+    /// Advertised context window for the model family, or nil for unknown
+    /// families (per model catalog, 2026-07: Opus/Sonnet/Fable/Mythos 1M,
+    /// Haiku 200K). Used only to scale the session row's context bar — the
+    /// bar is approximate by design and never drawn for unknown families;
+    /// the exact token count stays the source of truth.
+    var contextWindow: Int? {
+        guard let m = model?.lowercased() else { return nil }
+        if m.contains("haiku") { return 200_000 }
+        for family in ["opus", "sonnet", "fable", "mythos"] where m.contains(family) {
+            return 1_000_000
+        }
+        return nil
+    }
 }
 
 /// Reads Claude Code's local session registry (`~/.claude/sessions/<pid>.json`)

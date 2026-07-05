@@ -11,6 +11,12 @@ struct GraphData {
     var now: Date
     var fiveNow: Double?
     var weekNow: Double?
+    // Forecast overlay (utilization mode only): the right edge of the plot
+    // becomes a look-ahead to the 5-hour reset, with a dotted projection.
+    var fiveResetsAt: Date?
+    var projected: Double?
+    var crosses: Bool = false
+    var crossTime: Date?
 
     /// Cheap identity so the view can skip redraws when nothing meaningful changed
     /// (menuNeedsUpdate fires on every menu-tracking tick). The `now / 30` bucket lets a
@@ -21,7 +27,10 @@ struct GraphData {
         let last = samples.last.map { Int($0.t.timeIntervalSince1970) } ?? 0
         let f = fiveNow.map { Int($0.rounded()) } ?? -1
         let w = weekNow.map { Int($0.rounded()) } ?? -1
-        return "\(last)|\(samples.count)|\(mode.rawValue)|\(range.rawValue)|\(colorMode.rawValue)|\(f)|\(w)|\(Int(now.timeIntervalSince1970) / 30)"
+        let p = projected.map { Int($0.rounded()) } ?? -1
+        let r = fiveResetsAt.map { Int($0.timeIntervalSince1970) } ?? 0
+        let ct = crossTime.map { Int($0.timeIntervalSince1970) / 60 } ?? -1
+        return "\(last)|\(samples.count)|\(mode.rawValue)|\(range.rawValue)|\(colorMode.rawValue)|\(f)|\(w)|\(p)|\(crosses)|\(r)|\(ct)|\(Int(now.timeIntervalSince1970) / 30)"
     }
 }
 
@@ -31,6 +40,11 @@ struct GraphData {
 @MainActor
 final class HistoryGraphView: NSView {
     private var model: GraphData?
+
+    // Hover scrubbing: sample positions from the last render, and the current
+    // crosshair sample. Hover redraws bypass the signature (needsDisplay direct).
+    private var hoverPoints: [(x: CGFloat, t: Date, five: Double?, week: Double?)] = []
+    private var hover: (x: CGFloat, t: Date, five: Double?, week: Double?)?
 
     /// A normal step is the 300s poll; above this, treat two samples as a data gap (sleep
     /// or errors): break the utilization line and emit no rate bar across it. Generous
@@ -57,11 +71,42 @@ final class HistoryGraphView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) unused") }
 
+    // MARK: - Hover scrubbing
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard !hoverPoints.isEmpty else { return }
+        let mx = convert(event.locationInWindow, from: nil).x
+        var best = hoverPoints[0]
+        for p in hoverPoints where abs(p.x - mx) < abs(best.x - mx) { best = p }
+        if hover?.t != best.t {
+            hover = best
+            needsDisplay = true
+            displayIfNeeded()   // menu tracking does not service needsDisplay alone
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        guard hover != nil else { return }
+        hover = nil
+        needsDisplay = true
+        displayIfNeeded()
+    }
+
     /// Push fresh data; redraw only when the signature actually changed. displayIfNeeded()
     /// forces a synchronous repaint, since needsDisplay alone is not contractually serviced
     /// while a status-item menu is tracking.
     func update(_ d: GraphData) {
         guard d.signature != model?.signature else { return }
+        hover = nil          // the old crosshair may not exist in the new model
         model = d
         needsDisplay = true
         displayIfNeeded()
@@ -91,13 +136,28 @@ final class HistoryGraphView: NSView {
         // Need at least two points in one drawable series; a lone sample (even with both
         // values) has nothing to connect, so keep showing the collecting state.
         if max(fivePts.count, weekPts.count) < 2 {
+            hoverPoints = []; hover = nil
             drawCentered("Collecting history…", in: b, color: .secondaryLabelColor)
             return
         }
 
         let t0 = m.now.addingTimeInterval(-m.range.duration)
+
+        // Forecast look-ahead (utilization mode only): the right 20% of the plot
+        // spans [now, fiveResetsAt] and carries a dotted projection; history
+        // compresses into the left 80%. Without a live forecast the history
+        // keeps the full width, exactly as before.
+        let fcActive = m.mode == .utilization && m.fiveNow != nil && m.projected != nil
+            && (m.fiveResetsAt.map { $0 > m.now } ?? false)
+        let histWidth = fcActive ? plot.width * 0.8 : plot.width
+        let histMaxX = plot.minX + histWidth
         func X(_ t: Date) -> CGFloat {
-            plot.minX + CGFloat(max(0, min(1, t.timeIntervalSince(t0) / m.range.duration))) * plot.width
+            plot.minX + CGFloat(max(0, min(1, t.timeIntervalSince(t0) / m.range.duration))) * histWidth
+        }
+        func FX(_ t: Date) -> CGFloat {
+            guard fcActive, let reset = m.fiveResetsAt, reset > m.now else { return histMaxX }
+            let frac = max(0, min(1, t.timeIntervalSince(m.now) / reset.timeIntervalSince(m.now)))
+            return histMaxX + CGFloat(frac) * (plot.maxX - histMaxX)
         }
 
         // Coral in Claude mode; neutral otherwise (tinting a whole time series by a single
@@ -107,9 +167,20 @@ final class HistoryGraphView: NSView {
         let fiveColor = claude ? StatusRenderer.claudeCoral : NSColor.labelColor
         let weekColor = (claude ? StatusRenderer.claudeCoral : NSColor.labelColor).withAlphaComponent(0.5)
 
+        hoverPoints = []
         if m.mode == .utilization {
-            let peak = max(100.0, (fivePts + weekPts).map { $0.1 }.max() ?? 0)
+            var peak = max(100.0, (fivePts + weekPts).map { $0.1 }.max() ?? 0)
+            if fcActive, let p = m.projected { peak = max(peak, p) }
             func Y(_ v: Double) -> CGFloat { plot.minY + CGFloat(min(v, peak) / peak) * plot.height }
+
+            if fcActive {
+                StatusRenderer.claudeCoral.withAlphaComponent(0.05).setFill()
+                NSBezierPath(rect: CGRect(x: histMaxX, y: plot.minY,
+                                          width: plot.maxX - histMaxX, height: plot.height)).fill()
+                strokeVLine(at: histMaxX, from: plot.minY, to: plot.maxY, color: .quaternaryLabelColor)
+                strokeVLine(at: plot.maxX, from: plot.minY, to: plot.maxY,
+                            color: .tertiaryLabelColor, dashed: true)
+            }
             strokeHLine(at: Y(0), from: plot.minX, to: plot.maxX, color: .quaternaryLabelColor)
             strokeHLine(at: Y(100), from: plot.minX, to: plot.maxX, color: .tertiaryLabelColor, dashed: true)
             drawText("100", at: CGPoint(x: plot.minX - 26, y: Y(100) - 5), color: .tertiaryLabelColor)
@@ -117,6 +188,12 @@ final class HistoryGraphView: NSView {
             drawLine(weekPts, x: X, y: Y, color: weekColor, width: 1.0)
             drawLine(fivePts, x: X, y: Y, color: fiveColor, width: 1.5,
                      fillTo: claude ? plot.minY : nil, fillColor: fiveColor.withAlphaComponent(0.16))
+            if fcActive { drawProjection(m, Y: Y, FX: FX, startX: histMaxX, fiveColor: fiveColor) }
+
+            hoverPoints = m.samples.compactMap { s in
+                (s.five == nil && s.week == nil) ? nil : (x: X(s.t), t: s.t, five: s.five, week: s.week)
+            }
+            drawHover(plot: plot, Y: Y)
         } else {
             let fiveBars = rateBars(fivePts)
             let weekBars = rateBars(weekPts)
@@ -127,8 +204,76 @@ final class HistoryGraphView: NSView {
             drawBars(fiveBars, x: X, y: Y, baseY: plot.minY, color: fiveColor, width: 1.5)
         }
 
-        drawReadout(m, in: b)
-        drawTimeAxis(m, plot: plot, t0: t0)
+        drawReadout(m, in: b, leftAligned: fcActive, plot: plot)
+        drawTimeAxis(m, plot: plot, t0: t0, fcActive: fcActive, histMaxX: histMaxX)
+    }
+
+    /// Dotted projection from (now, current) toward the reset. If it crosses
+    /// 100 before the reset: amber to the crossing, a small red dot there, and
+    /// a faint run onward at the cap. Otherwise coral to (reset, projected).
+    private func drawProjection(_ m: GraphData, Y: (Double) -> CGFloat, FX: (Date) -> CGFloat,
+                                startX: CGFloat, fiveColor: NSColor) {
+        guard let five = m.fiveNow, let projected = m.projected else { return }
+        let start = CGPoint(x: startX, y: Y(five))
+        func dotted(from a: CGPoint, to bPt: CGPoint, color: NSColor, width: CGFloat = 1.2) {
+            let p = NSBezierPath()
+            p.move(to: a); p.line(to: bPt)
+            p.lineWidth = width
+            p.setLineDash([2.5, 2.5], count: 2, phase: 0)
+            p.lineCapStyle = .round
+            color.setStroke(); p.stroke()
+        }
+        func dot(_ at: CGPoint, _ color: NSColor, r: CGFloat = 2.5) {
+            color.setFill()
+            NSBezierPath(ovalIn: CGRect(x: at.x - r, y: at.y - r, width: r * 2, height: r * 2)).fill()
+        }
+        if m.crosses, let cross = m.crossTime, let reset = m.fiveResetsAt {
+            let crossPt = CGPoint(x: FX(cross), y: Y(100))
+            dotted(from: start, to: crossPt, color: .systemOrange)
+            dot(crossPt, .systemRed)
+            dotted(from: crossPt, to: CGPoint(x: FX(reset), y: Y(100)),
+                   color: NSColor.systemOrange.withAlphaComponent(0.35))
+        } else if let reset = m.fiveResetsAt {
+            let end = CGPoint(x: FX(reset), y: Y(projected))
+            dotted(from: start, to: end, color: fiveColor)
+            dot(end, fiveColor, r: 2)
+        }
+    }
+
+    /// Crosshair + dot on the 5-hour line + a compact value chip.
+    private func drawHover(plot: CGRect, Y: (Double) -> CGFloat) {
+        guard let h = hover, let m = model else { return }
+        strokeVLine(at: h.x, from: plot.minY, to: plot.maxY, color: .tertiaryLabelColor)
+        if let five = h.five {
+            let p = CGPoint(x: h.x, y: Y(five))
+            NSColor.labelColor.setFill()
+            NSBezierPath(ovalIn: CGRect(x: p.x - 2.5, y: p.y - 2.5, width: 5, height: 5)).fill()
+        }
+        let short = m.range == .last5h || m.range == .last24h
+        let timeLabel = short
+            ? Self.hmFormatter.string(from: h.t)
+            : "\(Self.dayFormatter.string(from: h.t)) \(Self.hmFormatter.string(from: h.t))"
+        func pct(_ v: Double?) -> String { v == nil ? "—" : "\(Int(v!.rounded()))%" }
+        let label = "\(timeLabel)  5h \(pct(h.five))  wk \(pct(h.week))"
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
+        let size = (label as NSString).size(withAttributes: [.font: font])
+        var x = h.x + 7
+        if x + size.width + 10 > plot.maxX { x = h.x - size.width - 17 }
+        let chip = CGRect(x: x, y: plot.maxY - size.height - 8,
+                          width: size.width + 10, height: size.height + 5)
+        NSColor.labelColor.withAlphaComponent(0.85).setFill()
+        NSBezierPath(roundedRect: chip, xRadius: 4, yRadius: 4).fill()
+        (label as NSString).draw(at: CGPoint(x: chip.minX + 5, y: chip.minY + 2.5),
+                                 withAttributes: [.font: font,
+                                                  .foregroundColor: NSColor.windowBackgroundColor])
+    }
+
+    private func strokeVLine(at x: CGFloat, from y0: CGFloat, to y1: CGFloat,
+                             color: NSColor, dashed: Bool = false) {
+        let p = NSBezierPath(); p.lineWidth = 0.5
+        if dashed { p.setLineDash([2, 2], count: 2, phase: 0) }
+        p.move(to: CGPoint(x: x, y: y0)); p.line(to: CGPoint(x: x, y: y1))
+        color.setStroke(); p.stroke()
     }
 
     /// Stroke a polyline (optionally filled to a baseline), broken into segments at data
@@ -206,7 +351,8 @@ final class HistoryGraphView: NSView {
         color.setStroke(); p.stroke()
     }
 
-    private func drawReadout(_ m: GraphData, in rect: CGRect) {
+    private func drawReadout(_ m: GraphData, in rect: CGRect,
+                             leftAligned: Bool = false, plot: CGRect = .zero) {
         let f = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         let s = NSMutableAttributedString()
         func add(_ label: String, _ v: Double?) {
@@ -220,19 +366,36 @@ final class HistoryGraphView: NSView {
         s.append(NSAttributedString(string: "   ", attributes: [.font: f]))
         add("wk ", m.weekNow)
         let sz = s.size()
-        s.draw(at: CGPoint(x: rect.maxX - sz.width - 8, y: rect.maxY - sz.height - 1))
+        // With the forecast zone active, the top-right corner belongs to the
+        // projection (the 100%-crossing dot lands exactly there) — tuck the
+        // readout into the top-left of the plot instead.
+        let x = leftAligned ? plot.minX + 4 : rect.maxX - sz.width - 8
+        s.draw(at: CGPoint(x: x, y: rect.maxY - sz.height - 1))
     }
 
-    private func drawTimeAxis(_ m: GraphData, plot: CGRect, t0: Date) {
+    private func drawTimeAxis(_ m: GraphData, plot: CGRect, t0: Date,
+                              fcActive: Bool, histMaxX: CGFloat) {
         let fmt = (m.range == .last5h || m.range == .last24h) ? Self.hmFormatter : Self.dayFormatter
         let f = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .regular)
         drawText(fmt.string(from: t0), at: CGPoint(x: plot.minX, y: 0), color: .tertiaryLabelColor, font: f)
-        let right = "now"
-        let rw = (right as NSString).size(withAttributes: [.font: f]).width
-        drawText(right, at: CGPoint(x: plot.maxX - rw, y: 0), color: .tertiaryLabelColor, font: f)
+        if fcActive, let reset = m.fiveResetsAt {
+            // "now" sits just left of the history/forecast divider; the reset
+            // time labels the dashed tick at the right edge.
+            let nowLbl = "now"
+            let nw = (nowLbl as NSString).size(withAttributes: [.font: f]).width
+            drawText(nowLbl, at: CGPoint(x: histMaxX - nw - 2, y: 0), color: .tertiaryLabelColor, font: f)
+            let resetLbl = Self.hmFormatter.string(from: reset)
+            let rw = (resetLbl as NSString).size(withAttributes: [.font: f]).width
+            drawText(resetLbl, at: CGPoint(x: plot.maxX - rw, y: 0), color: .tertiaryLabelColor, font: f)
+        } else {
+            let right = "now"
+            let rw = (right as NSString).size(withAttributes: [.font: f]).width
+            drawText(right, at: CGPoint(x: plot.maxX - rw, y: 0), color: .tertiaryLabelColor, font: f)
+        }
         let cap = (m.mode == .utilization ? "Utilization" : "Rise/5m") + " · " + m.range.title
         let cw = (cap as NSString).size(withAttributes: [.font: f]).width
-        drawText(cap, at: CGPoint(x: plot.midX - cw / 2, y: 0), color: .quaternaryLabelColor, font: f)
+        let capX = fcActive ? plot.minX + (histMaxX - plot.minX) / 2 - cw / 2 : plot.midX - cw / 2
+        drawText(cap, at: CGPoint(x: capX, y: 0), color: .quaternaryLabelColor, font: f)
     }
 
     private func drawText(_ s: String, at p: CGPoint, color: NSColor, font: NSFont? = nil) {

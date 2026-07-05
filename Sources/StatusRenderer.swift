@@ -2,11 +2,12 @@ import AppKit
 
 /// How the two utilization values are drawn in the menu bar.
 enum DisplayStyle: String, CaseIterable {
-    case concentric, percentages, bars, rings, arcs, pie, pips
+    case concentric, single, percentages, bars, rings, arcs, pie, pips
 
     var title: String {
         switch self {
         case .concentric:  return "Concentric rings"
+        case .single:      return "Single ring (5-hour)"
         case .percentages: return "Percentages"
         case .bars:        return "Bars"
         case .rings:       return "Twin rings"
@@ -123,16 +124,20 @@ enum StatusRenderer {
         }
     }
 
-    /// Apply the readout to the status button (text for percentages, image otherwise).
+    /// Apply the readout to the status button (text for percentages, image
+    /// otherwise). `projected` feeds the faint forecast ghost arc on the ring
+    /// styles, so a glance at the bar previews "ease off" before opening the menu.
     static func apply(to button: NSStatusBarButton, five: Double?, week: Double?,
-                      style: DisplayStyle, color mode: ColorMode, font: NSFont) {
+                      style: DisplayStyle, color mode: ColorMode, font: NSFont,
+                      projected: Double? = nil) {
         if style == .percentages {
             button.image = nil
             button.imagePosition = .noImage
             button.attributedTitle = percentText(five, week, mode, font)
         } else {
             button.attributedTitle = NSAttributedString(string: "")
-            button.image = image(five: five, week: week, style: style, mode: mode)
+            button.image = image(five: five, week: week, style: style, mode: mode,
+                                 projected: projected)
             button.imagePosition = .imageOnly
         }
     }
@@ -163,15 +168,24 @@ enum StatusRenderer {
             img.isTemplate = true
             return img
         }
-        return image(five: 78, week: 36, style: style, mode: .monochrome, height: 15)
+        return image(five: 78, week: 36, style: style, mode: .monochrome, height: 15,
+                     projected: style == .concentric || style == .single ? 94 : nil)
     }
 
     // MARK: - Image rendering
 
     static func image(five: Double?, week: Double?, style: DisplayStyle, mode: ColorMode,
-                      height: CGFloat = barHeight) -> NSImage {
+                      height: CGFloat = barHeight, projected: Double? = nil) -> NSImage {
         let template = (mode == .monochrome)
         let track = template ? NSColor(white: 0, alpha: 0.26) : NSColor.tertiaryLabelColor
+
+        /// Faint projected arc under the value arc — visible only across the
+        /// current→projected span. Amber when the projection reaches the cap.
+        func ghostColor(_ current: Double) -> NSColor? {
+            guard let projected, projected > current + 0.5 else { return nil }
+            if template { return NSColor(white: 0, alpha: 0.35) }
+            return projected >= 100 ? .systemOrange : color(current, mode).withAlphaComponent(0.30)
+        }
 
         // Concentric rings: a single activity-ring glyph in the app-icon style.
         // Outer ring = 5-hour (the limit watched most), inner ring = weekly.
@@ -184,8 +198,41 @@ enum StatusRenderer {
                 let lw = d * 0.125
                 let outerR = d / 2 - lw / 2 - 0.4
                 let innerR = outerR - lw - 1.0
-                drawRing(center: c, radius: outerR, width: lw, value: five, mode: mode, template: template, track: track)
+                stroke(arcCenter: c, radius: outerR, from: 0, to: 360, clockwise: false, width: lw, color: track)
+                if let five, let ghost = ghostColor(five), let projected {
+                    stroke(arcCenter: c, radius: outerR, from: 90,
+                           to: 90 - 360 * min(1, projected / 100), clockwise: true, width: lw, color: ghost)
+                }
+                if let five, five > 0 {
+                    let fill = template ? NSColor.black : color(five, mode)
+                    stroke(arcCenter: c, radius: outerR, from: 90,
+                           to: 90 - 360 * min(max(five / 100, 0), 1), clockwise: true, width: lw, color: fill)
+                }
                 drawRing(center: c, radius: innerR, width: lw, value: week, mode: mode, template: template, track: track)
+                return true
+            }
+            img.isTemplate = template
+            return img
+        }
+
+        // Single ring: the 5-hour window only, for people who watch just the
+        // near term. Same ghost-arc treatment as concentric.
+        if style == .single {
+            let d = height - 2
+            let img = NSImage(size: NSSize(width: d, height: height), flipped: false) { _ in
+                let c = CGPoint(x: d / 2, y: height / 2)
+                let lw = d * 0.16
+                let r = d / 2 - lw / 2 - 0.4
+                stroke(arcCenter: c, radius: r, from: 0, to: 360, clockwise: false, width: lw, color: track)
+                if let five, let ghost = ghostColor(five), let projected {
+                    stroke(arcCenter: c, radius: r, from: 90,
+                           to: 90 - 360 * min(1, projected / 100), clockwise: true, width: lw, color: ghost)
+                }
+                if let five, five > 0 {
+                    let fill = template ? NSColor.black : color(five, mode)
+                    stroke(arcCenter: c, radius: r, from: 90,
+                           to: 90 - 360 * min(max(five / 100, 0), 1), clockwise: true, width: lw, color: fill)
+                }
                 return true
             }
             img.isTemplate = template
@@ -197,7 +244,7 @@ enum StatusRenderer {
         switch style {
         case .bars, .pips:        (gaugeW, gap) = (7, 5)
         case .rings, .arcs, .pie: (gaugeW, gap) = (height - 2, 4)
-        case .percentages, .concentric: (gaugeW, gap) = (0, 0)
+        case .percentages, .concentric, .single: (gaugeW, gap) = (0, 0)
         }
         let size = NSSize(width: gaugeW * 2 + gap, height: height)
 
@@ -228,7 +275,7 @@ enum StatusRenderer {
     private static func drawGauge(_ style: DisplayStyle, value: CGFloat, in rect: CGRect,
                                   fill: NSColor, track: NSColor) {
         switch style {
-        case .percentages, .concentric:    // handled elsewhere (text / single glyph)
+        case .percentages, .concentric, .single:   // handled elsewhere (text / single glyph)
             break
 
         case .bars:

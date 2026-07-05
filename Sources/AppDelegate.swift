@@ -30,10 +30,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var snapshot: UsageSnapshot?
     private var lastError: String?
     private var needsAuth = false       // true only when the token is rejected
+    private var tokenWaiting = false    // UsageError.stale: waiting for Claude Code's refresh
+    private var forecast: Forecast?     // recomputed on every panel render
 
-    // Menu rows we mutate as data arrives.
-    private let fiveHourItem = NSMenuItem()
-    private let weeklyItem = NSMenuItem()
+    // Panel rows (custom views) and the remaining text rows.
+    private let headerView = PanelHeaderView(frame: NSRect(x: 0, y: 0, width: PanelStyle.width,
+                                                           height: PanelHeaderView.height))
+    private let headerItem = NSMenuItem()
+    private let bannerView = ForecastBannerView(frame: NSRect(x: 0, y: 0, width: PanelStyle.width, height: 46))
+    private let bannerItem = NSMenuItem()
+    private let pillsView = RangeModePillsView(frame: NSRect(x: 0, y: 0, width: PanelStyle.width,
+                                                             height: RangeModePillsView.height))
+    private let pillsItem = NSMenuItem()
     private let opusItem = NSMenuItem()
     private let sonnetItem = NSMenuItem()
     private let statusLine = NSMenuItem()
@@ -58,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // persisted local sample store. See HistoryStore / HistoryGraphView.
     private let historyStore = HistoryStore()
     private var history: [HistorySample] = []
-    private let graphView = HistoryGraphView(frame: NSRect(x: 0, y: 0, width: 240, height: 56))
+    private let graphView = HistoryGraphView(frame: NSRect(x: 0, y: 0, width: 360, height: 116))
     private let graphItem = NSMenuItem()
     private let graphSeparator = NSMenuItem.separator()
     private let historyMaxAge: TimeInterval = 32 * 24 * 3600   // 30d largest range + 2d margin
@@ -145,33 +153,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.autoenablesItems = false       // keep info rows full-color & readable
         menu.delegate = self
 
-        for item in [fiveHourItem, weeklyItem, opusItem, sonnetItem] {
-            item.isEnabled = false          // informational rows
+        // The instrument panel: header (rings + numbers), forecast banner, and
+        // the model-specific weekly text rows (shown only when in use).
+        headerItem.isEnabled = false
+        headerItem.view = headerView
+        menu.addItem(headerItem)
+        bannerItem.isEnabled = false
+        bannerItem.view = bannerView
+        menu.addItem(bannerItem)
+        for item in [opusItem, sonnetItem] {
+            item.isEnabled = false
+            item.isHidden = true
             menu.addItem(item)
         }
-        opusItem.isHidden = true
-        sonnetItem.isHidden = true
 
-        menu.addItem(.separator())
+        // Graph card: range/mode pills directly above the (now interactive)
+        // graph. Both items stay enabled — a disabled item can gate event
+        // delivery to its view, and these views handle their own clicks/hover.
+        pillsItem.isEnabled = true
+        pillsItem.view = pillsView
+        menu.addItem(pillsItem)
+        pillsView.onChange = { [weak self] in self?.applyGraphData() }
+        graphItem.isEnabled = true
+        graphItem.view = graphView
+        menu.addItem(graphItem)
+        menu.addItem(graphSeparator)
 
         // Active-sessions section: header + fixed row slots + trailing separator.
         sessionsHeader.isEnabled = false
-        sessionsHeader.title = "Sessions…"
+        sessionsHeader.attributedTitle = Self.sessionsHeaderTitle("Sessions…")
         menu.addItem(sessionsHeader)
         for _ in 0..<Self.maxSessionRows {
             let it = NSMenuItem()
             it.isEnabled = false
             it.isHidden = true
+            it.view = SessionRowView(frame: NSRect(x: 0, y: 0, width: PanelStyle.width,
+                                                   height: SessionRowView.height))
             sessionRowItems.append(it)
             menu.addItem(it)
         }
         menu.addItem(sessionsSeparator)
-
-        // Usage-history graph row (passive custom view) just above the status line.
-        graphItem.isEnabled = false
-        graphItem.view = graphView
-        menu.addItem(graphItem)
-        menu.addItem(graphSeparator)
 
         statusLine.isEnabled = false
         menu.addItem(statusLine)
@@ -187,14 +208,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let colorRoot = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
         colorRoot.submenu = buildColorMenu()
         menu.addItem(colorRoot)
-
-        let rangeRoot = NSMenuItem(title: "History Range", action: nil, keyEquivalent: "")
-        rangeRoot.submenu = buildRangeMenu()
-        menu.addItem(rangeRoot)
-
-        let graphRoot = NSMenuItem(title: "Graph", action: nil, keyEquivalent: "")
-        graphRoot.submenu = buildGraphModeMenu()
-        menu.addItem(graphRoot)
 
         loginToggle.action = #selector(toggleLoginItem)
         loginToggle.target = self
@@ -215,18 +228,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
     }
 
+    private static func sessionsHeaderTitle(_ s: String) -> NSAttributedString {
+        NSAttributedString(string: s.uppercased(), attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+            .kern: 0.6,
+        ])
+    }
+
     private func addAction(to menu: NSMenu, title: String, key: String, action: Selector) {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
         menu.addItem(item)
     }
 
-    // Lay out the session rows from the in-memory cache *before* the menu is shown,
-    // so the count/visibility is always correctly laid out on open. The async read
-    // kicked from menuWillOpen only refreshes the cache for next time.
+    // Lay out the panel and session rows from the in-memory cache *before* the
+    // menu is shown, so counts, relative reset times, and the banner height are
+    // fresh on every open. The async reads kicked from menuWillOpen only
+    // refresh the caches for next time.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        renderMenu()            // recomputes forecast + state; includes applyGraphData()
         renderSessions()
-        applyGraphData()        // the actual menu-open layout path; renderMenu() is not called on open
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -277,22 +299,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                   isClaudeAlive: { sessions.anyClaudeAlive() })
                 lastError = nil
                 needsAuth = false
+                tokenWaiting = false
                 recordHistory(snapshot)
             } catch let e as UsageError {
                 lastError = e.description
                 if case .auth = e { needsAuth = true } else { needsAuth = false }
+                if case .stale = e { tokenWaiting = true } else { tokenWaiting = false }
                 if case .http(429) = e { cooldownUntil = Date().addingTimeInterval(rateLimitCooldown) }
             } catch let e as KeychainError {
                 // Not signed in (no Keychain item) is the most likely first-run
                 // state — flag it loudly. Transient Keychain hiccups stay calm.
                 lastError = e.description
+                tokenWaiting = false
                 if case .notFound = e { needsAuth = true } else { needsAuth = false }
             } catch {
                 lastError = (error as CustomStringConvertible).description
                 needsAuth = false
+                tokenWaiting = false
             }
+            renderMenu()    // before the bar: the panel render refreshes the forecast
             renderBar()
-            renderMenu()
         }
     }
 
@@ -354,7 +380,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                              week: snap.sevenDay?.utilization,
                              style: Settings.style,
                              color: Settings.colorMode,
-                             font: barFont)
+                             font: barFont,
+                             projected: forecast?.projected)
         button.toolTip = tooltip(snap)
     }
 
@@ -369,21 +396,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func renderMenu() {
+        let now = Date()
+        let five = snapshot?.fiveHour?.utilization
+        let resetsAt = snapshot?.fiveHour?.resetsAt
+        forecast = Forecast.compute(samples: history, now: now, current: five, resetsAt: resetsAt)
+
+        let state = PanelState.derive(.init(
+            needsAuth: needsAuth, tokenWait: tokenWaiting, cooldownUntil: cooldownUntil,
+            fetchedAt: snapshot?.fetchedAt, five: five, forecast: forecast, now: now))
+
+        headerView.configure(PanelHeaderModel(
+            five: five,
+            week: snapshot?.sevenDay?.utilization,
+            projected: forecast?.projected,
+            fiveIsRed: (five ?? 0) >= 90,
+            fiveResetAbs: resetsAt.map { "resets \(Self.dailyResetFormatter.string(from: $0))" },
+            fiveResetRel: resetsAt.map { "in \(Self.rel($0.timeIntervalSince(now)))" },
+            weekResetAbs: snapshot?.sevenDay?.resetsAt.map { "resets \(Self.weeklyResetFormatter.string(from: $0))" },
+            weekResetRel: snapshot?.sevenDay?.resetsAt.map { "in \(Self.rel($0.timeIntervalSince(now)))" },
+            signedOut: needsAuth))
+
+        let message: String
+        if snapshot == nil && !needsAuth {
+            message = lastError ?? "Waiting for the first reading…"
+        } else {
+            message = state.message(five: five, forecast: forecast, resetsAt: resetsAt, now: now,
+                                    hm: { Self.dailyResetFormatter.string(from: $0) },
+                                    rel: { Self.rel($0) })
+        }
+        // Known residual: if a fetch lands while the menu is OPEN and the new
+        // message crosses a line-count boundary, NSMenu does not re-layout a
+        // custom view's changed height until the next open (same class of
+        // limitation as un-hiding rows mid-tracking). menuNeedsUpdate re-runs
+        // this before every open, so the layout is always correct on open.
+        bannerView.setFrameSize(NSSize(width: bannerView.frame.width,
+                                       height: ForecastBannerView.height(for: message,
+                                                                         width: PanelStyle.width)))
+        bannerView.configure(text: message, dotColor: state.dotColor)
+
         if let snap = snapshot {
-            fiveHourItem.title = row("5-hour limit", snap.fiveHour, weekly: false)
-            weeklyItem.title = row("Weekly limit", snap.sevenDay, weekly: true)
             configureModelRow(opusItem, label: "Weekly · Opus", snap.sevenDayOpus)
             configureModelRow(sonnetItem, label: "Weekly · Sonnet", snap.sevenDaySonnet)
-
             statusLine.title = lastError == nil
                 ? "Updated \(Self.updatedFormatter.string(from: snap.fetchedAt))"
                 : "Stale — \(lastError!)"
         } else {
-            fiveHourItem.title = "5-hour limit — …"
-            weeklyItem.title = "Weekly limit — …"
             statusLine.title = lastError ?? "Loading…"
         }
         applyGraphData()        // refresh the graph row when a fetch lands
+    }
+
+    /// Compact relative time: "2h 07m", "38m", "6 days".
+    private static func rel(_ interval: TimeInterval) -> String {
+        let s = max(0, Int(interval))
+        if s >= 48 * 3600 { return "\(Int((Double(s) / 86400).rounded())) days" }
+        let h = s / 3600, m = (s % 3600) / 60
+        return h > 0 ? String(format: "%dh %02dm", h, m) : "\(m)m"
     }
 
     /// Model-specific weekly caps only appear when actually in use.
@@ -403,50 +471,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return s
     }
 
-    /// Fill the pre-allocated session rows in place (title / isHidden only — safe
-    /// while the menu is open). The header carries the true count even when more
-    /// sessions exist than visible slots; the last slot then absorbs the overflow.
+    /// Fill the pre-allocated session rows in place (view content / isHidden
+    /// only — safe while the menu is open). The header carries the true count
+    /// even when more sessions exist than visible slots; the last slot then
+    /// absorbs the overflow.
     private func renderSessions() {
         let list = sessions
         if list.isEmpty {
-            sessionsHeader.title = "No active Claude sessions"
+            sessionsHeader.attributedTitle = Self.sessionsHeaderTitle("No active Claude sessions")
             for it in sessionRowItems { it.isHidden = true }
             return
         }
-        sessionsHeader.title = list.count == 1 ? "1 active session" : "\(list.count) active sessions"
+        sessionsHeader.attributedTitle = Self.sessionsHeaderTitle(
+            list.count == 1 ? "1 active session" : "\(list.count) active sessions")
 
         let cap = Self.maxSessionRows
         let overflow = list.count > cap
         let realRows = overflow ? cap - 1 : list.count
         for (i, it) in sessionRowItems.enumerated() {
+            guard let view = it.view as? SessionRowView else { continue }
             if i < realRows {
-                it.title = sessionRow(list[i])
+                view.configure(list[i])
                 it.isHidden = false
             } else if overflow, i == realRows {
-                it.title = "  + \(list.count - realRows) more"
+                view.configureOverflow(list.count - realRows)
                 it.isHidden = false
             } else {
                 it.isHidden = true
             }
         }
-    }
-
-    /// "  project  ·  Opus  ·  Busy  ·  56K ctx"
-    private func sessionRow(_ s: SessionInfo) -> String {
-        var parts = [s.projectName]
-        if let m = s.shortModel { parts.append(m) }
-        parts.append(s.status.capitalized)
-        parts.append(contextLabel(s.contextTokens))
-        return "  " + parts.joined(separator: "  ·  ")
-    }
-
-    /// Compact token count: "—", "512 ctx", "5.6K ctx", "56K ctx", "463K ctx".
-    private func contextLabel(_ tokens: Int?) -> String {
-        guard let t = tokens else { return "—" }
-        if t < 1000 { return "\(t) ctx" }
-        let k = Double(t) / 1000
-        let s = k < 10 ? String(format: "%.1f", k) : String(Int(k.rounded()))
-        return "\(s)K ctx"
     }
 
     // MARK: - Toggles
@@ -514,44 +567,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         applyGraphData()        // the graph follows the color mode too
     }
 
-    private func buildRangeMenu() -> NSMenu {
-        let m = NSMenu()
-        for r in HistoryRange.allCases {
-            let it = NSMenuItem(title: r.title, action: #selector(selectRange(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = r.rawValue
-            it.state = (r == Settings.historyRange) ? .on : .off
-            m.addItem(it)
-        }
-        return m
-    }
-
-    private func buildGraphModeMenu() -> NSMenu {
-        let m = NSMenu()
-        for g in GraphMode.allCases {
-            let it = NSMenuItem(title: g.title, action: #selector(selectGraphMode(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = g.rawValue
-            it.state = (g == Settings.graphMode) ? .on : .off
-            m.addItem(it)
-        }
-        return m
-    }
-
-    @objc private func selectRange(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let r = HistoryRange(rawValue: raw) else { return }
-        Settings.historyRange = r
-        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
-        applyGraphData()
-    }
-
-    @objc private func selectGraphMode(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let g = GraphMode(rawValue: raw) else { return }
-        Settings.graphMode = g
-        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
-        applyGraphData()
-    }
-
     // MARK: - Usage history
 
     /// Record a sample from a successful fetch: throttle to the ~5-min grid (Refresh
@@ -592,7 +607,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             colorMode: Settings.colorMode,
             now: now,
             fiveNow: snapshot?.fiveHour?.utilization,
-            weekNow: snapshot?.sevenDay?.utilization))
+            weekNow: snapshot?.sevenDay?.utilization,
+            fiveResetsAt: snapshot?.fiveHour?.resetsAt,
+            projected: forecast?.projected,
+            crosses: forecast?.crosses ?? false,
+            crossTime: forecast?.crossTime))
     }
 
     /// Merge two sample lists, de-duplicating by whole-second timestamp (`b` wins), sorted.

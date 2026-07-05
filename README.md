@@ -14,23 +14,23 @@ polls the same usage data that powers Claude Code's `/usage` command. No servers
 no accounts, no config files, no telemetry. It talks only to Anthropic.
 
 ```
-Menu bar:   ◍   concentric rings (default), or 14% / 4%, bars, gauges, ...
+Menu bar:   ◍   concentric rings (default), or 14% / 4%, single ring, bars, ...
 
-Dropdown:   5-hour limit — 14%  ·  resets 17:40
-            Weekly limit —  4%  ·  resets Sun 03:00
+Dropdown:   ◎  5-hour  14%   resets 17:40 · in 3h 12m
+                Weekly   4%   resets Sun 03:00 · in 6 days
+            ●  At this pace the 5-hour window settles near 32%
+               before it resets at 17:40. Plenty of headroom.
+            [5h] [24h] [7d] [30d]              [Usage | Rate]
+            ▁▂▄▆█▇▅▃▁▁▂▂▃ ┊ ╌╌╌●   history + forecast (hover for values)
             ─────────────
-            2 active sessions
-              claude-usage  ·  Opus  ·  Busy  ·  125K ctx
-              vircampype    ·  Opus  ·  Idle  ·  535K ctx
-            ─────────────
-            ▁▂▄▆█▇▅▃  ▁▁▂▂▃   usage history (5h + weekly)
+            2 ACTIVE SESSIONS
+            ● claude-usage  Opus  ▂▂▂▂▂  125K
+            ● vircampype    Opus  ▂▂▂▂▂  535K
             ─────────────
             Updated 14:26
             Refresh Now
-            Display Style  ▸   Concentric rings · Percentages · Bars · ...
+            Display Style  ▸   Concentric rings · Single ring · Percentages · ...
             Color          ▸   Claude · Thresholds · Monochrome · Heatmap · ...
-            History Range  ▸   Last 5h · Last 24h · Last 7d · Last 30d
-            Graph          ▸   Utilization · Consumption rate
             ✓ Launch at Login
               Show Dock Icon
             ─────────────
@@ -59,13 +59,17 @@ The **Color** menu controls how usage maps to color:
 - **Heatmap**: green to red as usage climbs
 - **System accent**: your macOS accent color
 
-## Usage history
+## Usage history & forecast
 
-The dropdown also draws an inline graph of past usage. Two views from the **Graph**
-menu: **Utilization** (the rings unrolled over time, 5-hour and weekly) and
-**Consumption rate** (how fast each window is filling). Choose the span from
-**History Range**: last 5h, 24h, 7d, or 30d. Samples are kept locally in a small
-append-only file and trimmed after about a month, so nothing leaves your Mac.
+The dropdown draws an inline graph of past usage; hover it for exact values and
+timestamps. In **Usage** mode the right edge of the plot looks ahead to the
+5-hour reset: the last hour's burn rate is projected forward as a dotted run,
+turning amber (with a red dot at the crossing) when the pace would reach 100%
+before the reset — the same projection the banner sentence and the faint ghost
+arc on the menu-bar rings are built from. **Rate** mode shows how fast each
+window is filling. Ranges (last 5h / 24h / 7d / 30d) and the mode switch sit as
+pills directly above the graph. Samples are kept locally in a small append-only
+file and trimmed after about a month, so nothing leaves your Mac.
 
 ## Requirements
 
@@ -129,7 +133,7 @@ never touch the repo.
 | Auth | OAuth token shared with Claude Code (Keychain service `Claude Code-credentials`), read silently and cached in memory. The token is refreshed only as a last resort and **never while any Claude Code process is running** — the refresh token is single-use, so spending it would log a live Claude Code out. While one runs, the app adopts whatever fresh token Claude Code writes |
 | Active sessions | Live Claude Code sessions **on this Mac** — project, model, status, and context tokens — read from `~/.claude/sessions/*.json` and each session's transcript tail. Local only, no network; undocumented internal state, so liable to change between CLI versions |
 | Usage history | Inline graph of past 5-hour and weekly utilization (or fill rate), spanning the last 5h to 30d. Sampled on each successful poll into an append-only file under Application Support, trimmed to about 32 days. Local only |
-| Display | `NSStatusItem` rendered as text or a drawn glyph: 7 styles × 5 color modes |
+| Display | `NSStatusItem` rendered as text or a drawn glyph: 8 styles × 5 color modes, with an optional forecast ghost arc on the ring styles |
 | Footprint | Menu-bar only (`LSUIElement`); optional Dock icon; launch-at-login via `SMAppService` |
 
 ## Project layout
@@ -139,6 +143,8 @@ Sources/
   main.swift           App entry + single-instance guard
   AppDelegate.swift    Status item, menu, polling
   StatusRenderer.swift Display styles + color modes (text / drawn glyphs)
+  Forecast.swift       Burn-rate projection + the panel's derived state
+  PanelViews.swift     Custom menu rows: header rings, banner, sessions, pills
   UsageClient.swift    Usage fetch + token refresh
   Keychain.swift       Read/write the shared Claude Code credentials
   LoginItem.swift      Launch-at-login via SMAppService
