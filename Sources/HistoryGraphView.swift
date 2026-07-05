@@ -175,12 +175,13 @@ final class HistoryGraphView: NSView {
             return histMaxX + CGFloat(frac) * (plot.maxX - histMaxX)
         }
 
-        // Coral in Claude mode; neutral otherwise (tinting a whole time series by a single
-        // current value is not meaningful for thresholds/heatmap). The readout still carries
-        // the colored cue in every mode.
-        let claude = m.colorMode == .claude
-        let fiveColor = claude ? StatusRenderer.claudeCoral : NSColor.labelColor
-        let weekColor = (claude ? StatusRenderer.claudeCoral : NSColor.labelColor).withAlphaComponent(0.5)
+        // Series ink follows the panel accent: coral in Claude mode, the system
+        // accent in System accent mode, neutral otherwise (tinting a whole time
+        // series by a single current value is not meaningful for thresholds/
+        // heatmap). The readout still carries the colored cue in every mode.
+        let chromatic = PanelStyle.accentIsChromatic(m.colorMode)
+        let fiveColor = PanelStyle.accent(for: m.colorMode)
+        let weekColor = fiveColor.withAlphaComponent(0.5)
 
         hoverPoints = []
         if m.mode == .utilization {
@@ -189,7 +190,7 @@ final class HistoryGraphView: NSView {
             func Y(_ v: Double) -> CGFloat { plot.minY + CGFloat(min(v, peak) / peak) * plot.height }
 
             if fcActive {
-                StatusRenderer.claudeCoral.withAlphaComponent(0.05).setFill()
+                fiveColor.withAlphaComponent(0.05).setFill()
                 NSBezierPath(rect: CGRect(x: histMaxX, y: plot.minY,
                                           width: plot.maxX - histMaxX, height: plot.height)).fill()
                 strokeVLine(at: histMaxX, from: plot.minY, to: plot.maxY, color: .quaternaryLabelColor)
@@ -202,7 +203,7 @@ final class HistoryGraphView: NSView {
             // weekly behind (thin line), 5-hour in front (line + faint fill)
             drawLine(weekPts, x: X, y: Y, color: weekColor, width: 1.0)
             drawLine(fivePts, x: X, y: Y, color: fiveColor, width: 1.5,
-                     fillTo: claude ? plot.minY : nil, fillColor: fiveColor.withAlphaComponent(0.16))
+                     fillTo: chromatic ? plot.minY : nil, fillColor: fiveColor.withAlphaComponent(0.16))
             if fcActive { drawProjection(m, Y: Y, FX: FX, startX: histMaxX, fiveColor: fiveColor) }
 
             hoverPoints = m.samples.compactMap { s in

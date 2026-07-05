@@ -7,13 +7,43 @@ enum PanelStyle {
     static let width: CGFloat = 360
     static let margin: CGFloat = 15
 
-    static var coral: NSColor { StatusRenderer.claudeCoral }
-    static var coralSoft: NSColor { StatusRenderer.claudeCoral.withAlphaComponent(0.14) }
-    static var coralGhost: NSColor { StatusRenderer.claudeCoral.withAlphaComponent(0.30) }
-    static var wk: NSColor { StatusRenderer.claudeCoral.withAlphaComponent(0.5) }
+    /// Chrome accent for panel elements that don't encode a value (active
+    /// pills, busy dot, context-bar fill, graph series). Follows the Color
+    /// mode: coral for Claude, the user's macOS accent for System accent, and
+    /// neutral label ink for monochrome/thresholds/heatmap — those modes
+    /// reserve color for the data itself. Value-bearing elements (the header
+    /// rings) use StatusRenderer.color(_:_:) directly instead, so the panel
+    /// mirrors the glyph.
+    static func accent(for mode: ColorMode) -> NSColor {
+        switch mode {
+        case .claude:                             return StatusRenderer.claudeCoral
+        case .accent:                             return .controlAccentColor
+        case .monochrome, .thresholds, .heatmap:  return .labelColor
+        }
+    }
+    static var accent: NSColor { accent(for: Settings.colorMode) }
+    static var accentHalf: NSColor { accent.withAlphaComponent(0.5) }
+
+    /// True when the accent is a hue (coral / system accent) rather than
+    /// neutral ink — gates the graph's area fill, which reads as smudge in gray.
+    static func accentIsChromatic(_ mode: ColorMode) -> Bool {
+        mode == .claude || mode == .accent
+    }
+
     static var track: NSColor { .quaternaryLabelColor }
     static var chip: NSColor { .quaternaryLabelColor }
     static var pillOnText: NSColor { NSColor(srgbRed: 1, green: 0.965, blue: 0.945, alpha: 1) }
+
+    /// Legible text on an accent-filled pill, picked by the fill's resolved
+    /// luminance at draw time: a yellow system accent or the light ink of
+    /// monochrome-in-dark-mode needs dark text; coral and the darker accents
+    /// keep the warm off-white. Threshold 0.7 keeps dark-mode coral (0.63) on
+    /// the light side, matching the pre-accent design.
+    static func textOnAccent(_ fill: NSColor) -> NSColor {
+        guard let c = fill.usingColorSpace(.sRGB) else { return pillOnText }
+        let luma = 0.299 * c.redComponent + 0.587 * c.greenComponent + 0.114 * c.blueComponent
+        return luma > 0.7 ? NSColor.black.withAlphaComponent(0.85) : pillOnText
+    }
 
     static func draw(_ s: String, at p: NSPoint, font: NSFont, color: NSColor) {
         (s as NSString).draw(at: p, withAttributes: [.font: font, .foregroundColor: color])
@@ -150,13 +180,19 @@ final class PanelHeaderView: NSView {
         trackRing(rO)
         trackRing(rI)
         guard !m.signedOut else { return }
+        // Value arcs take the glyph's exact color function, so the rings track
+        // the Color mode: coral (red ≥90) for Claude, orange/red warnings for
+        // thresholds, the heat hue, the system accent, or plain ink.
+        let mode = Settings.colorMode
         if let projected = m.projected, let five = m.five, projected > five + 0.5 {
             arc(radius: rO, frac: projected / 100,
-                color: projected >= 100 ? .systemOrange : PanelStyle.coralGhost)
+                color: projected >= 100 ? .systemOrange
+                                        : StatusRenderer.color(five, mode).withAlphaComponent(0.30))
         }
         arc(radius: rO, frac: (m.five ?? 0) / 100,
-            color: m.fiveIsRed ? .systemRed : PanelStyle.coral)
-        arc(radius: rI, frac: (m.week ?? 0) / 100, color: PanelStyle.wk)
+            color: StatusRenderer.color(m.five ?? 0, mode))
+        arc(radius: rI, frac: (m.week ?? 0) / 100,
+            color: StatusRenderer.color(m.week ?? 0, mode).withAlphaComponent(0.5))
     }
 }
 
@@ -216,7 +252,7 @@ final class SessionRowView: NSView {
         let card = NSRect(x: PanelStyle.margin, y: 0,
                           width: bounds.width - 2 * PanelStyle.margin, height: Self.height - 6)
         let dot = NSRect(x: card.minX + 9, y: card.midY - 4, width: 8, height: 8)
-        (s.status.lowercased() == "busy" ? PanelStyle.coral : NSColor.tertiaryLabelColor).setFill()
+        (s.status.lowercased() == "busy" ? PanelStyle.accent : NSColor.tertiaryLabelColor).setFill()
         NSBezierPath(ovalIn: dot).fill()
 
         // Right side first, so the name knows how much room it has.
@@ -236,7 +272,7 @@ final class SessionRowView: NSView {
             let frac = min(1, Double(tokens) / Double(window))
             if frac > 0.01 {
                 let fill = NSRect(x: bar.minX, y: bar.minY, width: bar.width * frac, height: bar.height)
-                (frac > 0.75 ? NSColor.systemOrange : PanelStyle.wk).setFill()
+                (frac > 0.75 ? NSColor.systemOrange : PanelStyle.accentHalf).setFill()
                 NSBezierPath(roundedRect: fill, xRadius: 2, yRadius: 2).fill()
             }
             rightEdge -= barW + 10
@@ -307,16 +343,18 @@ final class RangeModePillsView: NSView {
         let h: CGFloat = 20
         let y = (bounds.height - h) / 2
         var x = PanelStyle.margin
+        let accent = PanelStyle.accent
+        let onAccent = PanelStyle.textOnAccent(accent)
 
         for r in HistoryRange.allCases {
             let title = r.pillTitle
             let w = PanelStyle.size(title, font: font).width + 16
             let rect = NSRect(x: x, y: y, width: w, height: h)
             let active = r == Settings.historyRange
-            (active ? PanelStyle.coral : PanelStyle.chip).setFill()
+            (active ? accent : PanelStyle.chip).setFill()
             NSBezierPath(roundedRect: rect, xRadius: h / 2, yRadius: h / 2).fill()
             PanelStyle.draw(title, at: NSPoint(x: rect.minX + 8, y: rect.minY + 3),
-                            font: font, color: active ? PanelStyle.pillOnText : .secondaryLabelColor)
+                            font: font, color: active ? onAccent : .secondaryLabelColor)
             rangeRects.append((r, rect))
             x = rect.maxX + 5
         }
@@ -328,10 +366,10 @@ final class RangeModePillsView: NSView {
             let w = PanelStyle.size(title, font: font).width + 16
             let rect = NSRect(x: rightX - w, y: y, width: w, height: h)
             let active = g == Settings.graphMode
-            (active ? PanelStyle.coral : PanelStyle.chip).setFill()
+            (active ? accent : PanelStyle.chip).setFill()
             NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
             PanelStyle.draw(title, at: NSPoint(x: rect.minX + 8, y: rect.minY + 3),
-                            font: font, color: active ? PanelStyle.pillOnText : .secondaryLabelColor)
+                            font: font, color: active ? onAccent : .secondaryLabelColor)
             modeRects.append((g, rect))
             rightX = rect.minX - 4
         }

@@ -532,7 +532,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Settings.colorMode = c
         sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
         renderBar()
-        applyGraphData()        // the graph follows the color mode too
+        // The panel follows the color mode too: rings, pills, session dots, and
+        // the graph all resolve their accent from Settings at draw time — mark
+        // them dirty so the next menu open repaints in the new mode.
+        renderMenu()
+        pillsView.needsDisplay = true
+        for it in sessionRowItems { it.view?.needsDisplay = true }
     }
 
     // MARK: - Usage history

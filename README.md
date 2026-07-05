@@ -80,6 +80,11 @@ The **Color** menu controls how usage maps to color:
 - **Heatmap**: green to red as usage climbs
 - **System accent**: your macOS accent color
 
+The dropdown panel follows the same choice: the header rings use the mode's
+value colors, and the pills, session markers, and graph take coral for Claude,
+your macOS accent for System accent, and neutral ink for the other modes,
+which reserve color for warnings and data.
+
 ## Usage history & forecast
 
 The dropdown draws an inline graph of past usage; hovering it shows exact
