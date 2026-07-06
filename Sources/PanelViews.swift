@@ -185,8 +185,10 @@ final class PanelHeaderView: NSView {
         // thresholds, the heat hue, the system accent, or plain ink.
         let mode = Settings.colorMode
         if let projected = m.projected, let five = m.five, projected > five + 0.5 {
+            // At-cap amber matches the glyph's ghost: translucent, so it stays
+            // separable from an orange heatmap/thresholds value arc.
             arc(radius: rO, frac: projected / 100,
-                color: projected >= 100 ? .systemOrange
+                color: projected >= 100 ? NSColor.systemOrange.withAlphaComponent(0.45)
                                         : StatusRenderer.color(five, mode).withAlphaComponent(0.30))
         }
         arc(radius: rO, frac: (m.five ?? 0) / 100,

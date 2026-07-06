@@ -183,11 +183,14 @@ enum StatusRenderer {
         let track = template ? NSColor(white: 0, alpha: 0.26) : NSColor.tertiaryLabelColor
 
         /// Faint projected arc under the value arc — visible only across the
-        /// current→projected span. Amber when the projection reaches the cap.
+        /// current→projected span. Amber when the projection reaches the cap,
+        /// but still translucent: heatmap/thresholds fill mid-range values in
+        /// orange too, and a solid amber ghost would read as a full ring.
         func ghostColor(_ current: Double) -> NSColor? {
             guard let projected, projected > current + 0.5 else { return nil }
             if template { return NSColor(white: 0, alpha: 0.35) }
-            return projected >= 100 ? .systemOrange : color(current, mode).withAlphaComponent(0.30)
+            return projected >= 100 ? NSColor.systemOrange.withAlphaComponent(0.45)
+                                    : color(current, mode).withAlphaComponent(0.30)
         }
 
         // Concentric rings: a single activity-ring glyph in the app-icon style.
