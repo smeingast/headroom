@@ -22,7 +22,7 @@ No servers, no accounts, no config files, no telemetry. It talks to Anthropic
 only, and never to OpenAI at all.
 
 <p align="center">
-  <img src="assets/dropdown.png" width="388"
+  <img src="assets/dropdown.png" width="391"
        alt="The two-provider panel: a Claude instrument with large 5-hour and
             weekly rings, a compact Codex secondary card with its as-of staleness
             readout and a Lead button, a status line, stacked per-provider history
