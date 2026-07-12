@@ -1,22 +1,33 @@
-# Claude Usage
+# Headroom (formerly Claude Usage)
 
-A macOS menu-bar app that shows your Claude usage limits at a glance (AppKit,
-zero third-party dependencies, one colored glyph plus an instrument panel).
+macOS menu-bar app showing Claude and Codex usage limits (AppKit, zero
+dependencies). Claude data comes from the authenticated usage API; Codex data
+is reconstructed READ-ONLY from `~/.codex/sessions` rollout logs (never
+`auth.json`, never the network).
 
-## Gates
+## Gates (run both before handing a change back)
 
-Run both before handing a change back:
+- `./build.sh`: canonical app build, plain `swiftc` over `Sources/*.swift`.
+  That glob compiles EVERY file under `Sources/` into the app: keep them
+  dependency-free and plain-swiftc-safe; fixtures and helpers go under
+  `Tests/`, one-shot harnesses under `tools/`.
+- `swift test`: unit gate via `Package.swift` (Sources minus `main.swift`).
+  Includes pixel-parity corpora under `Tests/Fixtures/render-goldens/` that
+  pin the renderer; regenerate only deliberately (README in that directory).
 
-- `./build.sh` builds the canonical `Claude Usage.app` with plain `swiftc` over
-  `Sources/*.swift` (ad-hoc signing is fine for local builds). Every file added
-  under `Sources/` is compiled into the app by that glob, so it must stay
-  dependency-free and plain-swiftc-safe.
-- `swift test` runs the unit gate via `Package.swift` (the `ClaudeUsageCore`
-  library target plus `ClaudeUsageTests`). Test-only fixtures and helpers live
-  under `Tests/`, never under `Sources/`.
+## Conventions and traps
 
-## Codex-support effort
+- Comments explain WHY (constraints, reasoning), never what the next line does.
+- The installed app in /Applications and dev builds in `build/` share the
+  bundle id; a single-instance guard means you must quit one to run the other.
+  Restore the installed app after manual checks.
+- `design/` is gitignored by convention (design records, review archives).
+- Rollout file/dir names are LOCAL time, timestamps UTC: order by mtime only.
 
-The in-progress work to add Codex as a second provider is tracked in
-`implement-codex-plan.md`, `implement-codex-brief.md` (the binding package
-contract), and `design/codex-support/`.
+## Status
+
+Codex support is complete (packages 1-4b + polish, 741cf46..256e5a0); the
+effort's records (package contract, plan, amendments, review archives) live
+under `design/codex-support/`. Remaining: release prep (in-app rebrand to
+Headroom, README, versioning, notarized release), see
+`handoff-release-prep.md`.
