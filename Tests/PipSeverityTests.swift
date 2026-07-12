@@ -2,9 +2,9 @@ import XCTest
 import AppKit
 @testable import ClaudeUsageCore
 
-// Amendment 5's complete pip severity -> color mapping for the menu-bar corner
-// pip. Dormant in 4a (nothing draws a pip yet), but the mapping is pure and the
-// wiring in 4b depends on exactly this table.
+// Amendment 5's complete severity -> color mapping. Since v0.10 (corner pip
+// removed) the only consumers are the PANEL's banner and strip dots, which
+// depend on exactly this table.
 final class PipSeverityTests: XCTestCase {
 
     func testRedIsSystemRed() {

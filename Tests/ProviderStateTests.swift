@@ -430,21 +430,6 @@ final class ProviderStateTests: XCTestCase {
                        "3 active sessions")
     }
 
-    // MARK: - Bar pip filter (amendment 23)
-
-    func testBarPipIsWarningLightOnly() {
-        // The bar pip is a warning light: red and amber pass through untouched;
-        // calm (either provider), muted, and hidden yield nil (no pip drawn).
-        // Amendment 5's severity table stays intact for the panel dots; this filter
-        // applies at the bar rendering layer only.
-        XCTAssertEqual(ProviderState.barPip(.red), .red)
-        XCTAssertEqual(ProviderState.barPip(.amber), .amber)
-        XCTAssertNil(ProviderState.barPip(.calm(.codex)))
-        XCTAssertNil(ProviderState.barPip(.calm(.claude)))
-        XCTAssertNil(ProviderState.barPip(.muted))
-        XCTAssertNil(ProviderState.barPip(.hidden))
-    }
-
     // MARK: - Show Codex resolution
 
     func testShowCodexResolution() {

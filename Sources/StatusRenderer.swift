@@ -47,15 +47,16 @@ enum ColorMode: String, CaseIterable {
 
 /// Which provider a rendered element represents in the two-provider hierarchy:
 /// the user-chosen `primary` (full instrument / bar glyph) or the `secondary`
-/// (compact strip / corner pip). Only the System-accent color mode dims the
+/// (compact strip). Only the System-accent color mode dims the
 /// secondary role by alpha (amendment 14); every other mode ignores it. The
 /// default at every renderer entry point is `.primary`, so all pre-4a call sites
 /// are unaffected. Dormant in 4a: no call site passes `.secondary` yet.
 enum ProviderRole { case primary, secondary }
 
-/// The menu-bar corner pip's state for the OTHER (secondary) provider, mapped to
-/// a color by amendment 5. `Equatable` so the pure state-derivation tests can
-/// assert the resolved severity directly.
+/// A provider's at-a-glance state severity, mapped to a color by amendment 5.
+/// Feeds the PANEL's banner and strip dots (the menu bar itself carries no
+/// secondary-provider light since v0.10 removed the corner pip). `Equatable`
+/// so the pure state-derivation tests can assert the resolved severity.
 enum PipSeverity: Equatable {
     case red                        // a real >= 90 on that provider's own 5-hour window
     case amber                      // watch / pace, or an attention state:
@@ -136,8 +137,7 @@ enum Settings {
         get { UsageProviderKind(rawValue: d.string(forKey: "primaryProvider") ?? "") ?? .claude }
         set { d.set(newValue.rawValue, forKey: "primaryProvider") }
     }
-    /// What the menu-bar readout shows. Default: the primary provider's glyph
-    /// (plus the dormant corner pip for the other provider).
+    /// What the menu-bar readout shows. Default: the primary provider's glyph.
     static var barShows: BarShows {
         get { BarShows(rawValue: d.string(forKey: "barShows") ?? "") ?? .primary }
         set { d.set(newValue.rawValue, forKey: "barShows") }
@@ -295,8 +295,8 @@ enum StatusRenderer {
         }
     }
 
-    /// Amendment 5's complete pip color mapping for the menu-bar corner pip.
-    /// Returns `nil` for `.hidden` (draw no pip). Dormant in 4a.
+    /// Amendment 5's complete severity color mapping, consumed by the panel's
+    /// banner and strip dots. Returns `nil` for `.hidden` (draw no dot).
     static func pipColor(_ severity: PipSeverity) -> NSColor? {
         switch severity {
         case .red:         return .systemRed
@@ -325,8 +325,7 @@ enum StatusRenderer {
         }
     }
 
-    static func percentText(_ five: Double?, _ week: Double?, _ mode: ColorMode, _ font: NSFont,
-                            pip: PipSeverity? = nil) -> NSAttributedString {
+    static func percentText(_ five: Double?, _ week: Double?, _ mode: ColorMode, _ font: NSFont) -> NSAttributedString {
         func chunk(_ v: Double?) -> NSAttributedString {
             let str = v == nil ? "—" : "\(Int(v!.rounded()))%"
             let col = v == nil ? NSColor.labelColor : color(v!, mode)
@@ -336,13 +335,6 @@ enum StatusRenderer {
         s.append(chunk(five))
         s.append(NSAttributedString(string: " / ", attributes: [.font: font, .foregroundColor: NSColor.tertiaryLabelColor]))
         s.append(chunk(week))
-        // Dormant trailing pip (amendment 6): the text style carries the second
-        // provider's state as a colored "·" bullet. `pip == nil` (every pre-4a
-        // call site) appends nothing, so the string is byte-identical to before.
-        // Droppable in 4b if illegible at the bar font.
-        if let pip, let pc = pipColor(pip) {
-            s.append(NSAttributedString(string: " ·", attributes: [.font: font, .foregroundColor: pc]))
-        }
         return s
     }
 
@@ -368,24 +360,9 @@ enum StatusRenderer {
     static func image(five: Double?, week: Double?, style: DisplayStyle, mode: ColorMode,
                       height: CGFloat = barHeight, projected: Double? = nil,
                       provider: UsageProviderKind = .claude, role: ProviderRole = .primary,
-                      pip: PipSeverity? = nil,
                       inferredFive: Bool = false, inferredWeek: Bool = false) -> NSImage {
         let template = (mode == .monochrome)
         let track = template ? NSColor(white: 0, alpha: 0.26) : NSColor.tertiaryLabelColor
-
-        // Composite the dormant corner pip (amendment 6) onto a finished glyph.
-        // With `pip == nil` (every pre-4a call site) this returns the glyph object
-        // untouched, so the output is byte-identical to the pre-4a renderer.
-        func finish(_ img: NSImage) -> NSImage {
-            guard let pip, let pc = pipColor(pip) else { return img }
-            let out = NSImage(size: img.size, flipped: false) { rect in
-                img.draw(in: rect)
-                drawCornerPip(glyphSize: img.size, color: pc)
-                return true
-            }
-            out.isTemplate = false      // the pip carries hue; do not template-tint it
-            return out
-        }
 
         /// Faint projected arc under the value arc — visible only across the
         /// current→projected span. Amber when the projection reaches the cap,
@@ -434,7 +411,7 @@ enum StatusRenderer {
                 return true
             }
             img.isTemplate = template
-            return finish(img)
+            return img
         }
 
         // Single ring: the 5-hour window only, for people who watch just the
@@ -462,7 +439,7 @@ enum StatusRenderer {
                 return true
             }
             img.isTemplate = template
-            return finish(img)
+            return img
         }
 
         // Bars: the only remaining style drawn as a side-by-side pair
@@ -483,7 +460,7 @@ enum StatusRenderer {
             return true
         }
         img.isTemplate = template
-        return finish(img)
+        return img
     }
 
     /// Compose two glyphs into one side-by-side "Both" image (amendment /
@@ -515,30 +492,6 @@ enum StatusRenderer {
             let fill = template ? NSColor.black : color(v ?? 0, mode, provider: provider, role: role)
             stroke(arcCenter: c, radius: radius, from: 90, to: 90 - 360 * val, clockwise: true, width: lw, color: fill)
         }
-    }
-
-    /// Draw the bottom-right corner state pip into the CURRENT graphics context
-    /// for a glyph of `glyphSize`, per amendment 6: first blend-clear a knockout
-    /// gap (pip radius + 1 pt) so the pip separates from ring / track pixels on any
-    /// menu-bar background, then fill a 5 pt circle. Callers composite this into a
-    /// non-template NSImage so the pip keeps its hue. Dormant in 4a.
-    static func drawCornerPip(glyphSize s: NSSize, color: NSColor) {
-        let pipDiameter: CGFloat = 5
-        let pipR = pipDiameter / 2
-        let gapR = pipR + 1                     // knockout is pip radius + 1 pt
-        // Sit the pip fully inside the glyph, hard into the bottom-right corner.
-        let cx = s.width - pipR - 0.5
-        let cy = pipR + 0.5
-        guard let ctx = NSGraphicsContext.current else { return }
-        ctx.saveGraphicsState()
-        ctx.compositingOperation = .clear       // blend-clear the knockout gap
-        NSColor.black.setFill()                 // fill color is irrelevant under .clear
-        NSBezierPath(ovalIn: CGRect(x: cx - gapR, y: cy - gapR,
-                                    width: gapR * 2, height: gapR * 2)).fill()
-        ctx.restoreGraphicsState()
-        color.setFill()
-        NSBezierPath(ovalIn: CGRect(x: cx - pipR, y: cy - pipR,
-                                    width: pipDiameter, height: pipDiameter)).fill()
     }
 
     /// Stroke a full-circle track with a dashed pattern and NO value fill: the

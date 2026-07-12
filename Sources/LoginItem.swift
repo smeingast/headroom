@@ -23,7 +23,10 @@ enum LoginItem {
                 guard service.status != .enabled else { return }
                 try service.register()
             } else {
-                guard service.status == .enabled else { return }
+                // Unregister from ANY registered state, not just .enabled: a
+                // registration stuck in .requiresApproval would otherwise survive
+                // "off" as a pending System Settings entry while the UI reads off.
+                guard service.status != .notRegistered else { return }
                 try service.unregister()
             }
         } catch {

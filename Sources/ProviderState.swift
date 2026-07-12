@@ -145,21 +145,6 @@ enum ProviderState {
         }
     }
 
-    // MARK: - Bar pip filter (amendment 23)
-
-    /// The severity the BAR may draw as its corner pip / percentages bullet, or nil
-    /// for no pip at all. Amendment 23 (Stefan's live feedback): the bar pip is a
-    /// WARNING LIGHT only; a calm teal dot next to the rings reads as noise. Red and
-    /// amber pass through; calm, muted, and hidden draw nothing. Amendment 5's full
-    /// severity-to-color table is untouched: the panel banner/strip dots still render
-    /// every state, so calm and muted stay visible where there is room for them.
-    nonisolated static func barPip(_ s: PipSeverity) -> PipSeverity? {
-        switch s {
-        case .red, .amber:            return s
-        case .calm, .muted, .hidden:  return nil
-        }
-    }
-
     // MARK: - Claude derivation
 
     /// Resolve the Claude instrument state for two-provider mode. Chain (unchanged

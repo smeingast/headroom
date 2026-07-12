@@ -29,6 +29,9 @@ is reconstructed READ-ONLY from `~/.codex/sessions` rollout logs (never
 Codex support is complete; the effort's records (package contract, plan,
 amendments, review archives) live under `design/codex-support/`. Shipped as
 Headroom v0.9 (2026-07-12): in-app rebrand, README rewrite, notarized release
-on GitHub. Bundle id stays `eu.smeingast.claude-menubar-usage` unless a
-migration is deliberately built: it keys Application Support, defaults, the
-Keychain ACL, and the login item.
+on GitHub. v0.10 (2026-07-12) moved all options into a tabbed Settings window
+(`Sources/SettingsWindow.swift`, records under `design/settings-window/`),
+added the About tab, removed the menu-bar corner pip, and made the graph
+projection follow the series ink. Bundle id stays
+`eu.smeingast.claude-menubar-usage` unless a migration is deliberately built:
+it keys Application Support, defaults, the Keychain ACL, and the login item.

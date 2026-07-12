@@ -92,8 +92,9 @@ the last log entry and no more; the app does not pretend otherwise.
 
 ## Display styles and color
 
-Pick how the menu-bar readout looks from the **Display Style** menu: **Concentric
-rings** (default; outer = 5-hour, inner = weekly), a **Single ring (5-hour)**
+Pick how the menu-bar readout looks with the **Style** popup in **Settings →
+Menu Bar** (choose **Settings…** in the dropdown): **Concentric rings**
+(default; outer = 5-hour, inner = weekly), a **Single ring (5-hour)**
 showing just the near-term window, **Percentages**, or **Bars**. The ring styles
 carry the forecast arc described above; percentages and bars stay static.
 Earlier versions offered four more styles (twin rings, gauges, pie slices,
@@ -103,7 +104,7 @@ choice of a retired style now falls back to concentric rings.
 
 ![Display styles](assets/styles.png)
 
-The **Color** menu controls how usage maps to color:
+The **Color** popup on the same tab controls how usage maps to color:
 
 - **Brand** (default): each provider's accent, coral for Claude and teal for
   Codex, tuned for light and dark menu bars; red ≥ 90%
@@ -127,10 +128,10 @@ clicking them keeps the menu open.
 
 In **Usage** mode with the 5h or 24h range, the time axis extends past "now" to
 the end of the current 5-hour window and the last hour's fill rate is projected
-forward as a dotted line, drawn to the same time scale as the history so its
-slope can be compared directly. When the pace would reach 100% before the reset,
-the projection turns amber and a red dot marks the crossing; the arc on the
-menu-bar rings shows the same projection. The 7d and 30d ranges show history
+forward as a dotted line, drawn to the same time scale as the history (and in
+the same color as the history line it extends) so its slope can be compared
+directly. When the pace would reach 100% before the reset, a red dot marks the
+crossing; the arc on the menu-bar rings shows the same projection. The 7d and 30d ranges show history
 only, since five hours of look-ahead would collapse into a few pixels. **Rate**
 mode instead plots how fast each window was filling over time. For Codex, the
 projection is drawn only while the log is live; when Codex is idle the graph
@@ -144,20 +145,22 @@ Mac.
 
 ## Settings
 
-Beyond Display Style and Color, the menu carries:
+All options live in a tabbed Settings window: choose **Settings…** in the
+dropdown (or press ⌘, while it is open). **About Headroom** opens the same
+window on its About tab, which shows the version and build number.
 
-- **Bar Shows** (default **Primary**): what the menu-bar item draws. **Primary**
-  shows the leading provider plus a small pip for the other; **Both** draws the
-  two side by side; **Claude** or **Codex** shows that provider alone.
-- **Graphs** (default **Both**): which provider history graphs are stacked in the
-  panel (**Both**, **Claude**, or **Codex**).
-- **Show Codex** (default **Auto**): whether the Codex surfaces appear at all.
-  **Auto** shows Codex when `~/.codex` exists; **On** and **Off** force it.
-- **Launch at Login** and **Show Dock Icon**: standard toggles (the app is
-  menu-bar only by default).
+- **General**: **Start Headroom at login** and **Show Dock icon** (the app is
+  menu-bar only by default), plus **Bar shows** (default **Primary**): what the
+  menu-bar item draws. **Primary** shows the leading provider; **Both** draws
+  the two side by side; **Claude** or **Codex** shows that provider alone.
+- **Menu Bar**: the **Style** and **Color** popups described above.
+- **Codex**: **Show Codex** (default **Auto**: the Codex surfaces appear while
+  `~/.codex` exists; **On** and **Off** force it) and **Graphs** (default
+  **Both**): which provider history graphs are stacked in the panel.
 
-The Bar Shows, Graphs, and Show Codex controls appear only once Codex is present;
-with Codex hidden the app is the single-provider Claude Usage panel it always was.
+Every change applies immediately. The Codex tab and the Bar shows option appear
+only once Codex is present; with Codex hidden the app is the single-provider
+Claude Usage panel it always was.
 
 ## Requirements
 
@@ -249,6 +252,7 @@ Sources/
   Forecast.swift             Fill rate + projection to the 5-hour reset
   HistoryStore.swift         Append-only local sample store (one file per provider)
   StatusRenderer.swift       Menu-bar display styles + color modes (text / drawn glyphs)
+  SettingsWindow.swift       Tabbed Settings window (General / Menu Bar / Codex / About)
   HistoryGraphView.swift     History graph with forecast overlay, idle legends, and hover
   PanelViews.swift           Custom menu rows: header rings, sessions, range and mode pills
   PanelTwoProvider.swift     Two-provider panel chrome: rings, tag row, secondary strip, status copy, Lead

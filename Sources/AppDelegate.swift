@@ -65,8 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Claude-only mode (kept out of layout), so the panel is the literal v0.8
     // instrument then. There is NO honesty banner under the instrument (amendment 24:
     // "this box should never appear"): the signals live in the tag-row age line, the
-    // rings, the warning-light pip, the status line, and the secondary strip's
-    // compact sub-line.
+    // rings, the status line, and the secondary strip's compact sub-line.
     private let tagRowItem = NSMenuItem()
     private let tagRowView = TagRowView(frame: NSRect(x: 0, y: 0, width: PanelStyle.width,
                                                       height: TagRowView.height))
@@ -81,15 +80,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // place; only the card COUNT is structural and per-open.
     private let secondGraphItem = NSMenuItem()
     private let secondGraphView = HistoryGraphView(frame: NSRect(x: 0, y: 0, width: 360, height: 116))
-    // The two-provider settings roots, kept as properties so openResolve can show/
-    // hide them from the live install stat (hidden on a clean machine; visible even
-    // under Show Codex = Off, which must stay reversible from the UI).
-    private let barShowsRootItem = NSMenuItem()
-    private let showCodexRootItem = NSMenuItem()
-    private let graphsRootItem = NSMenuItem()
     private let statusLine = NSMenuItem()
-    private let loginToggle = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
-    private let dockToggle = NSMenuItem(title: "Show Dock Icon", action: nil, keyEquivalent: "")
+    // The Settings window (v0.10: all options moved out of the dropdown).
+    // Created on first open, kept for the app's lifetime.
+    private var settingsWC: SettingsWindowController?
 
     // Active local Claude Code sessions (read from ~/.claude). Pre-allocated, hidden
     // menu rows we fill in place — mutating title/isHidden is safe while the menu is
@@ -178,7 +172,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         applyDockVisibility()             // honor saved preference (default: no Dock icon)
         LoginItem.migrateLegacyAgentIfNeeded()   // upgrade pre-SMAppService installs in place
         LoginItem.enableOnFirstLaunchIfNeeded()  // brand-new installs default to launch-at-login
-        refreshLoginToggle()
 
         // Refresh when the Mac wakes from sleep so numbers aren't stale.
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -249,7 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // the header; it is hidden (out of layout) in Claude-only mode, so the
         // header is rings + numbers exactly as v0.8. No honesty banner exists below
         // the instrument (amendment 24): the state signals live in the tag-row age
-        // line, the rings, the pip, the status line, and the strip's sub-line.
+        // line, the rings, the status line, and the strip's sub-line.
         tagRowItem.isEnabled = false
         tagRowItem.view = tagRowView
         tagRowItem.isHidden = true
@@ -314,42 +307,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let styleRoot = NSMenuItem(title: "Display Style", action: nil, keyEquivalent: "")
-        styleRoot.submenu = buildStyleMenu()
-        menu.addItem(styleRoot)
-
-        let colorRoot = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
-        colorRoot.submenu = buildColorMenu()
-        menu.addItem(colorRoot)
-
-        // Two-provider controls (package 4b). Bar Shows, Graphs, and Show Codex
-        // follow the same enum-driven submenu pattern as Display Style / Color.
-        // Primary provider is chosen with the strip's Lead button rather than a menu
-        // item. All three items are hidden until openResolve confirms Codex is
-        // installed (a clean machine sees the literal v0.8 settings menu); they stay
-        // visible under Show Codex = Off so Off remains reversible from the UI.
-        barShowsRootItem.title = "Bar Shows"
-        barShowsRootItem.submenu = buildBarShowsMenu()
-        barShowsRootItem.isHidden = true
-        menu.addItem(barShowsRootItem)
-
-        graphsRootItem.title = "Graphs"
-        graphsRootItem.submenu = buildGraphsMenu()
-        graphsRootItem.isHidden = true
-        menu.addItem(graphsRootItem)
-
-        showCodexRootItem.title = "Show Codex"
-        showCodexRootItem.submenu = buildShowCodexMenu()
-        showCodexRootItem.isHidden = true
-        menu.addItem(showCodexRootItem)
-
-        loginToggle.action = #selector(toggleLoginItem)
-        loginToggle.target = self
-        menu.addItem(loginToggle)
-
-        dockToggle.action = #selector(toggleDockIcon)
-        dockToggle.target = self
-        menu.addItem(dockToggle)
+        // All options live in the Settings window (v0.10); the dropdown carries
+        // only actions. About shares the window (its About tab) rather than the
+        // standard about panel, so app/build info and settings are one surface.
+        addAction(to: menu, title: "Settings…", key: ",", action: #selector(openSettingsClicked))
+        addAction(to: menu, title: "About Headroom", key: "", action: #selector(openAboutClicked))
 
         menu.addItem(.separator())
         // Quit targets NSApp explicitly — terminate(_:) lives on NSApplication, not on
@@ -427,15 +389,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         secondGraphItem.isHidden = ProviderState.graphCards(
             Settings.graphs, twoProvider: twoProvider,
             primary: Settings.primaryProvider).count < 2
-
-        // The two-provider settings controls exist only when Codex is installed (a
-        // clean machine sees the literal v0.8 settings menu). Deliberately keyed on
-        // the ROOT stat, not on showCodex: under Show Codex = Off the items stay
-        // visible, otherwise Off would be a trap with no UI path back.
-        let installed = FileManager.default.fileExists(atPath: Self.codexRootPath)
-        barShowsRootItem.isHidden = !installed
-        graphsRootItem.isHidden = !installed
-        showCodexRootItem.isHidden = !installed
 
         guard twoProvider else { return }
         // Freeze this open's strip height from the secondary strip model (its
@@ -595,10 +548,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 defer { self.isFetchingCodex = false }
                 self.codexUsage = result
                 self.ingestCodexEvents(events)
-                // A fresh Codex reading can flip two-provider visibility or the pip
-                // severity; refresh the bar (always safe) and the panel content (safe
-                // while open: row STRUCTURE was resolved at open, this only mutates
-                // content). Rows are added/removed only on the next open.
+                // A fresh Codex reading can flip two-provider visibility or the
+                // panel dot severities; refresh the bar (always safe) and the panel
+                // content (safe while open: row STRUCTURE was resolved at open, this
+                // only mutates content). Rows are added/removed only on the next open.
                 self.renderMenu()
                 self.renderBar()
             }
@@ -609,8 +562,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The bar resolves Codex visibility on EVERY render (it is not a menu, so the
     /// "restructure only at open" rule does not apply): a hidden/absent Codex keeps
-    /// the literal v0.8 bar; a present one respects `Bar Shows` and draws the corner
-    /// pip. `codexUISurfacesVisible()` reads the freshest usage status, so the bar
+    /// the literal v0.8 bar; a present one respects `Bar Shows`.
+    /// `codexUISurfacesVisible()` reads the freshest usage status, so the bar
     /// tracks Codex even while the menu is closed.
     private func renderBar() {
         guard let button = statusItem.button else { return }
@@ -660,11 +613,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         button.toolTip = Self.tooltipText(snap, lastError: lastError)
     }
 
-    /// The two-provider bar. `Bar Shows` selects Primary (+ the other provider's pip),
-    /// Both (side-by-side glyphs), or a single provider. Provider isolation
-    /// (amendment 13): the "⚠" auth takeover fires ONLY when the bar shows Claude
-    /// alone (Bar Shows = Claude); otherwise a signed-out Claude is carried by an
-    /// amber pip plus the panel copy, and the bar keeps drawing glyphs.
+    /// The two-provider bar. `Bar Shows` selects Primary, Both (side-by-side
+    /// glyphs), or a single provider. Provider isolation (amendment 13): the "⚠"
+    /// auth takeover fires ONLY when the bar shows Claude alone (Bar Shows =
+    /// Claude); otherwise a signed-out Claude is carried by the panel copy, and
+    /// the bar keeps drawing glyphs. The bar carries NO secondary-provider state
+    /// light: the corner pip was removed in v0.10 (Stefan: an amber dot for a
+    /// merely inferred-zero Codex read as noise; the panel keeps the full
+    /// severity table).
     private func renderBarTwoProvider(_ button: NSStatusBarButton) {
         computeDerived(now: Date())
         let style = Settings.style
@@ -688,25 +644,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let xInfF = codexDerived?.inferredFive ?? false
         let xInfW = codexDerived?.inferredWeek ?? false
         let xProj = (codexDerived?.forecastActive ?? false) ? codexDerived?.projFive : nil
-        // The pip carries the OTHER provider (relative to the primary glyph),
-        // filtered to a WARNING LIGHT (amendment 23): only red/amber survive to the
-        // corner pip / percentages bullet; calm and muted draw no pip at all (a calm
-        // teal dot next to the rings read as noise on Stefan's live bar). The panel
-        // banner/strip dots keep amendment 5's full table. The filter sits here at
-        // the single definition both bar call sites (image pip, percentText pip)
-        // consume, so no unfiltered severity can reach the bar.
-        let otherPip = ProviderState.barPip(
-            primary == .claude ? (codexDerived?.pip ?? .hidden)
-                               : (claudeDerived?.pip ?? .hidden))
 
         if style == .percentages {
             let attr: NSAttributedString
             switch bar {
             case .primary, .both:
-                // Text can't stack two providers cleanly, so the primary's numbers
-                // carry the other provider as the trailing pip bullet (amendment 6).
+                // Text can't stack two providers cleanly; Both falls back to the
+                // primary's numbers.
                 let (f, w) = primary == .claude ? (cFive, cWeek) : (xFive, xWeek)
-                attr = StatusRenderer.percentText(f, w, mode, barFont, pip: otherPip)
+                attr = StatusRenderer.percentText(f, w, mode, barFont)
             case .claude:
                 attr = StatusRenderer.percentText(cFive, cWeek, mode, barFont)
             case .codex:
@@ -716,25 +662,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             button.imagePosition = .noImage
             button.attributedTitle = attr
         } else {
-            func claudeGlyph(pip: PipSeverity?) -> NSImage {
+            func claudeGlyph() -> NSImage {
                 StatusRenderer.image(five: cFive, week: cWeek, style: style, mode: mode,
-                                     projected: forecast?.projected, provider: .claude, pip: pip)
+                                     projected: forecast?.projected, provider: .claude)
             }
-            func codexGlyph(pip: PipSeverity?) -> NSImage {
+            func codexGlyph() -> NSImage {
                 StatusRenderer.image(five: xFive, week: xWeek, style: style, mode: mode,
-                                     projected: xProj, provider: .codex, pip: pip,
+                                     projected: xProj, provider: .codex,
                                      inferredFive: xInfF, inferredWeek: xInfW)
             }
             let img: NSImage
             switch bar {
             case .primary:
-                img = primary == .claude ? claudeGlyph(pip: otherPip) : codexGlyph(pip: otherPip)
+                img = primary == .claude ? claudeGlyph() : codexGlyph()
             case .both:
-                img = StatusRenderer.sideBySide(claudeGlyph(pip: nil), codexGlyph(pip: nil))
+                img = StatusRenderer.sideBySide(claudeGlyph(), codexGlyph())
             case .claude:
-                img = claudeGlyph(pip: nil)
+                img = claudeGlyph()
             case .codex:
-                img = codexGlyph(pip: nil)
+                img = codexGlyph()
             }
             button.attributedTitle = NSAttributedString(string: "")
             button.image = img
@@ -1096,135 +1042,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: - Toggles
-
-    @objc private func toggleLoginItem() {
-        LoginItem.setEnabled(!LoginItem.isEnabled)
-        refreshLoginToggle()
-    }
-
-    private func refreshLoginToggle() {
-        loginToggle.state = LoginItem.isEnabled ? .on : .off
-    }
-
-    @objc private func toggleDockIcon() {
-        let show = !UserDefaults.standard.bool(forKey: "showDockIcon")
-        UserDefaults.standard.set(show, forKey: "showDockIcon")
-        applyDockVisibility()
-    }
+    // MARK: - Settings window
 
     private func applyDockVisibility() {
         let show = UserDefaults.standard.bool(forKey: "showDockIcon")   // default false → menu bar only
         NSApp.setActivationPolicy(show ? .regular : .accessory)
-        dockToggle.state = show ? .on : .off
     }
 
-    // MARK: - Display settings
+    @objc private func openSettingsClicked() { settingsWindow().show(tab: nil) }
+    @objc private func openAboutClicked() { settingsWindow().show(tab: .about) }
 
-    private func buildStyleMenu() -> NSMenu {
-        let m = NSMenu()
-        for s in DisplayStyle.allCases {
-            let it = NSMenuItem(title: s.title, action: #selector(selectStyle(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = s.rawValue
-            it.state = (s == Settings.style) ? .on : .off
-            it.image = StatusRenderer.previewImage(for: s)
-            m.addItem(it)
-        }
-        return m
+    private func settingsWindow() -> SettingsWindowController {
+        if let wc = settingsWC { return wc }
+        let wc = SettingsWindowController(
+            hooks: SettingsHooks(
+                // Style / Bar Shows change only the bar readout.
+                barChanged: { [weak self] in self?.renderBar() },
+                colorChanged: { [weak self] in self?.repaintForColorMode() },
+                // Show Codex / Graphs: the bar updates now; the panel's row
+                // structure resolves on the next open (NSMenu can't restructure
+                // rows while up), exactly as the old menu handlers behaved.
+                codexChanged: { [weak self] in self?.renderBar() },
+                dockChanged: { [weak self] in self?.applyDockVisibility() }),
+            codexRootPath: Self.codexRootPath)
+        settingsWC = wc
+        return wc
     }
 
-    private func buildColorMenu() -> NSMenu {
-        let m = NSMenu()
-        for c in ColorMode.allCases {
-            let it = NSMenuItem(title: c.title, action: #selector(selectColor(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = c.rawValue
-            it.state = (c == Settings.colorMode) ? .on : .off
-            m.addItem(it)
-        }
-        return m
-    }
-
-    @objc private func selectStyle(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let s = DisplayStyle(rawValue: raw) else { return }
-        Settings.style = s
-        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
+    /// The panel follows the color mode too: rings, pills, session dots, and
+    /// the graph all resolve their accent from Settings at draw time — mark
+    /// them dirty so the next menu open repaints in the new mode.
+    private func repaintForColorMode() {
         renderBar()
-    }
-
-    @objc private func selectColor(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let c = ColorMode(rawValue: raw) else { return }
-        Settings.colorMode = c
-        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
-        renderBar()
-        // The panel follows the color mode too: rings, pills, session dots, and
-        // the graph all resolve their accent from Settings at draw time — mark
-        // them dirty so the next menu open repaints in the new mode.
         renderMenu()
         pillsView.needsDisplay = true
         for v in [tagRowView, stripView] as [NSView] { v.needsDisplay = true }
         for it in sessionRowItems { it.view?.needsDisplay = true }
-    }
-
-    private func buildBarShowsMenu() -> NSMenu {
-        let m = NSMenu()
-        for b in BarShows.allCases {
-            let it = NSMenuItem(title: b.title, action: #selector(selectBarShows(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = b.rawValue
-            it.state = (b == Settings.barShows) ? .on : .off
-            m.addItem(it)
-        }
-        return m
-    }
-
-    private func buildShowCodexMenu() -> NSMenu {
-        let m = NSMenu()
-        for s in ShowCodex.allCases {
-            let it = NSMenuItem(title: s.title, action: #selector(selectShowCodex(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = s.rawValue
-            it.state = (s == Settings.showCodex) ? .on : .off
-            m.addItem(it)
-        }
-        return m
-    }
-
-    @objc private func selectBarShows(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let b = BarShows(rawValue: raw) else { return }
-        Settings.barShows = b
-        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
-        renderBar()
-    }
-
-    @objc private func selectShowCodex(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let s = ShowCodex(rawValue: raw) else { return }
-        Settings.showCodex = s
-        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
-        // The bar can update immediately; the panel's row structure is resolved on the
-        // next open (NSMenu can't restructure rows while up).
-        renderBar()
-    }
-
-    private func buildGraphsMenu() -> NSMenu {
-        let m = NSMenu()
-        for g in GraphsShown.allCases {
-            let it = NSMenuItem(title: g.title, action: #selector(selectGraphs(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = g.rawValue
-            it.state = (g == Settings.graphs) ? .on : .off
-            m.addItem(it)
-        }
-        return m
-    }
-
-    @objc private func selectGraphs(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let g = GraphsShown(rawValue: raw) else { return }
-        Settings.graphs = g
-        sender.menu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
-        // Card count is structural and resolves on the next open (the click closed
-        // the menu anyway); nothing needs an immediate re-render.
     }
 
     // MARK: - Usage history

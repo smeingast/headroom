@@ -262,9 +262,12 @@ final class HistoryGraphView: NSView {
         }
     }
 
-    /// Dotted projection from (now, current) toward the reset. If it crosses
-    /// 100 before the reset: amber to the crossing, a small red dot there, and
-    /// a faint run onward at the cap. Otherwise coral to (reset, projected).
+    /// Dotted projection from (now, current) toward the reset, always in the
+    /// series ink (provider- and color-mode-aware, like the history line it
+    /// extends). If it crosses 100 before the reset: a small red dot marks the
+    /// crossing (red = hits the cap, matching red-zone semantics everywhere
+    /// else) and a faint run continues along the cap. Otherwise straight to
+    /// (reset, projected).
     private func drawProjection(_ m: GraphData, Y: (Double) -> CGFloat, FX: (Date) -> CGFloat,
                                 startX: CGFloat, fiveColor: NSColor) {
         guard let five = m.fiveNow, let projected = m.projected else { return }
@@ -283,10 +286,10 @@ final class HistoryGraphView: NSView {
         }
         if m.crosses, let cross = m.crossTime, let reset = m.fiveResetsAt {
             let crossPt = CGPoint(x: FX(cross), y: Y(100))
-            dotted(from: start, to: crossPt, color: .systemOrange)
+            dotted(from: start, to: crossPt, color: fiveColor)
             dot(crossPt, .systemRed)
             dotted(from: crossPt, to: CGPoint(x: FX(reset), y: Y(100)),
-                   color: NSColor.systemOrange.withAlphaComponent(0.35))
+                   color: fiveColor.withAlphaComponent(0.35))
         } else if let reset = m.fiveResetsAt {
             let end = CGPoint(x: FX(reset), y: Y(projected))
             dotted(from: start, to: end, color: fiveColor)
