@@ -27,8 +27,8 @@ is reconstructed READ-ONLY from `~/.codex/sessions` rollout logs (never
 ## Status
 
 Codex support is complete; the effort's records (package contract, plan,
-amendments, review archives) live under `design/codex-support/`. Remaining:
-release prep (in-app rebrand to Headroom, README with a new hero screenshot,
-versioning, notarized release). Bundle id stays
-`eu.smeingast.claude-menubar-usage` unless a migration is deliberately built:
-it keys Application Support, defaults, the Keychain ACL, and the login item.
+amendments, review archives) live under `design/codex-support/`. Shipped as
+Headroom v0.9 (2026-07-12): in-app rebrand, README rewrite, notarized release
+on GitHub. Bundle id stays `eu.smeingast.claude-menubar-usage` unless a
+migration is deliberately built: it keys Application Support, defaults, the
+Keychain ACL, and the login item.
