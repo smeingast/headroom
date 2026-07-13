@@ -169,6 +169,14 @@ Every change applies immediately. The Codex tab and the Bar shows option appear
 only once Codex is present; with Codex hidden the app is the single-provider
 Claude Usage panel it always was.
 
+Headroom also checks GitHub for a newer release about once a day. When one is
+available it shows on the About tab (and as a row in the dropdown); **Install and
+Relaunch** downloads it, verifies the signature and notarization, swaps it in,
+and restarts the app. Uncheck **Check for updates automatically** on the About
+tab to turn the daily check off. Source builds, and copies running outside an
+Applications folder, are offered a **View Release…** link to the download page
+instead of an in-place install.
+
 ## Requirements
 
 - Apple Silicon Mac, macOS 13 (Ventura) or later.
@@ -218,6 +226,18 @@ ditto -c -k --keepParent "build/Headroom.app" "build/Headroom-vX.Y.zip"
 `notarize_setup.sh` needs an **app-specific password** (account.apple.com,
 Sign-In and Security). Your Apple ID and Team ID live only in the keychain and
 never touch the repo.
+
+That same zip is the in-app update artifact, so three invariants matter for the
+updater to work:
+
+- The release asset must be named exactly `Headroom-<tag>.zip` with `Headroom.app`
+  at the top level of the archive.
+- The tag must be `vX.Y[.Z]` (dotted integers), for example `v0.11` or `v0.11.2`.
+- Never recreate or backdate a release. The updater trusts the ordering of
+  `/releases/latest`; a pointer that moves backward makes the version compare fail
+  closed, and users simply see "up to date". The in-app installer still verifies the
+  Developer ID signature, notarization, and that the new version matches the tag
+  before it swaps anything in, so a bad asset is refused rather than installed.
 </details>
 
 ## First run

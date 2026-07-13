@@ -94,6 +94,7 @@ final class SettingsWindowController: NSWindowController {
 
     private let hooks: SettingsHooks
     private let codexRootPath: String
+    private let updater: UpdateChecker
     private let tabs = SettingsTabsViewController()
 
     // All panes exist for the controller's lifetime; only the Codex pane's
@@ -123,11 +124,19 @@ final class SettingsWindowController: NSWindowController {
     private var generalGrid: NSGridView!
     private static let barShowsRowIndices = [3, 4]
 
+    // About-tab update controls, re-rendered from the checker's state on show and on
+    // every onChange (the status label wraps, so its height can change the pane's
+    // fitting size — recomputed like resolveCodexSurfaces does for General).
+    private var updateStatusLabel: NSTextField!
+    private var updateButton: NSButton!
+    private var autoUpdateCheckbox: NSButton!
+
     private var centeredOnce = false
 
-    init(hooks: SettingsHooks, codexRootPath: String) {
+    init(hooks: SettingsHooks, codexRootPath: String, updater: UpdateChecker) {
         self.hooks = hooks
         self.codexRootPath = codexRootPath
+        self.updater = updater
 
         let window = SettingsPanel(
             contentRect: .zero,
@@ -192,6 +201,21 @@ final class SettingsWindowController: NSWindowController {
         select(showCodexPopup, raw: Settings.showCodex.rawValue)
         select(barShowsPopup, raw: Settings.barShows.rawValue)
         select(graphsPopup, raw: Settings.graphs.rawValue)
+        refreshUpdateControls()
+    }
+
+    /// Re-render the About tab's update status, button, and auto-check box from the
+    /// checker's current state. Called on show() and from AppDelegate on every
+    /// onChange. The status label wraps, so recompute the About pane's
+    /// preferredContentSize (fixed once at loadView) when its height may have moved.
+    func refreshUpdateControls() {
+        updateStatusLabel.stringValue = updater.aboutStatusText()
+        updateButton.title = updater.aboutButtonTitle()
+        updateButton.isEnabled = updater.aboutButtonEnabled()
+        autoUpdateCheckbox.state = UpdateChecker.autoCheckEnabled ? .on : .off
+        if let vc = aboutItem.viewController {
+            vc.preferredContentSize = vc.view.fittingSize
+        }
     }
 
     private func select(_ popup: NSPopUpButton, raw: String) {
@@ -290,6 +314,16 @@ final class SettingsWindowController: NSWindowController {
         version.font = .systemFont(ofSize: 12)
         version.textColor = .secondaryLabelColor
 
+        // Update status sits directly under the version line; it wraps so a long
+        // error message stays inside the pane (refreshUpdateControls fills it in).
+        updateStatusLabel = NSTextField(wrappingLabelWithString: "")
+        updateStatusLabel.font = .systemFont(ofSize: 11)
+        updateStatusLabel.textColor = .secondaryLabelColor
+        updateStatusLabel.alignment = .center
+        updateStatusLabel.isSelectable = false
+        updateStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        updateStatusLabel.widthAnchor.constraint(equalToConstant: 340).isActive = true
+
         let tagline = NSTextField(labelWithString: "Claude & Codex usage limits in your menu bar.")
         tagline.font = .systemFont(ofSize: 12)
 
@@ -303,15 +337,42 @@ final class SettingsWindowController: NSWindowController {
         license.font = .systemFont(ofSize: 11)
         license.textColor = .tertiaryLabelColor
 
-        let stack = NSStackView(views: [icon, name, version, tagline, link, license])
+        // One stateful button (Check → Install/View → Downloading/Installing →
+        // Retry) plus the auto-check preference. Both driven by the checker.
+        updateButton = NSButton(title: "Check for Updates…",
+                                target: self, action: #selector(updateButtonClicked(_:)))
+        updateButton.bezelStyle = .rounded
+        autoUpdateCheckbox = NSButton(checkboxWithTitle: "Check for updates automatically",
+                                      target: self, action: #selector(autoUpdateToggled(_:)))
+
+        let stack = NSStackView(views: [icon, name, version, updateStatusLabel,
+                                        tagline, link, license, updateButton, autoUpdateCheckbox])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 6
         stack.setCustomSpacing(10, after: icon)
         stack.setCustomSpacing(2, after: name)
-        stack.setCustomSpacing(12, after: version)
+        stack.setCustomSpacing(4, after: version)
+        stack.setCustomSpacing(12, after: updateStatusLabel)
         stack.setCustomSpacing(12, after: link)
+        stack.setCustomSpacing(16, after: license)
+        stack.setCustomSpacing(8, after: updateButton)
+        // Seed the initial values here (aboutItem is not built yet, so the pane's
+        // fitting size at loadView already reflects real text); refreshControls()
+        // and onChange re-render and recompute the pane height from then on.
+        updateStatusLabel.stringValue = updater.aboutStatusText()
+        updateButton.title = updater.aboutButtonTitle()
+        updateButton.isEnabled = updater.aboutButtonEnabled()
+        autoUpdateCheckbox.state = UpdateChecker.autoCheckEnabled ? .on : .off
         return padded(stack, width: 420, verticalInset: 24)
+    }
+
+    @objc private func updateButtonClicked(_ sender: NSButton) {
+        updater.performAboutAction()
+    }
+
+    @objc private func autoUpdateToggled(_ sender: NSButton) {
+        UpdateChecker.autoCheckEnabled = (sender.state == .on)
     }
 
     // MARK: - Layout helpers

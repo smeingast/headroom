@@ -85,6 +85,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Created on first open, kept for the app's lifetime.
     private var settingsWC: SettingsWindowController?
 
+    // In-app updates (v0.11). The checker owns its own cadence and state, fully
+    // separate from the usage-fetch gates; its terminate/open-URL side effects are
+    // injected so UpdateChecker itself stays AppKit-free. `updateItem` is a
+    // pre-added, normally-hidden dropdown row (mutated title/isHidden in place while
+    // the menu is open, the same safe pattern the session rows use).
+    private var updateChecker: UpdateChecker!
+    private let updateItem = NSMenuItem()
+
     // Active local Claude Code sessions (read from ~/.claude). Pre-allocated, hidden
     // menu rows we fill in place — mutating title/isHidden is safe while the menu is
     // open; structurally inserting rows would not be. maxSessionRows caps the display;
@@ -172,6 +180,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         applyDockVisibility()             // honor saved preference (default: no Dock icon)
         LoginItem.migrateLegacyAgentIfNeeded()   // upgrade pre-SMAppService installs in place
         LoginItem.enableOnFirstLaunchIfNeeded()  // brand-new installs default to launch-at-login
+
+        // In-app updates. Terminate/open-URL are injected so the checker stays
+        // AppKit-free; onChange fans state to the dropdown row and (when open) the
+        // About tab. Created before the Settings window's lazy build so it can be
+        // handed to the controller.
+        updateChecker = UpdateChecker(
+            terminate: { NSApp.terminate(nil) },
+            openURL: { NSWorkspace.shared.open($0) })
+        updateChecker.onChange = { [weak self] in self?.updateDidChange() }
+        // A first check shortly after launch, delayed so it never competes with the
+        // first usage fetch. Still gated by the updater's own 24 h cooldown, so most
+        // launches this is a no-op.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            self?.updateChecker.triggerAutoCheck()
+        }
 
         // Refresh when the Mac wakes from sleep so numbers aren't stale.
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -307,6 +330,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        // Update status row: hidden until the checker is not idle/upToDate, then it
+        // shows the available/downloading/failed state and opens Settings → About
+        // (the single surface that owns progress, errors, and retry).
+        updateItem.target = self
+        updateItem.action = #selector(updateItemClicked)
+        updateItem.isHidden = true
+        menu.addItem(updateItem)
+
         // All options live in the Settings window (v0.10); the dropdown carries
         // only actions. About shares the window (its About tab) rather than the
         // standard about panel, so app/build info and settings are one surface.
@@ -425,6 +456,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.refreshSessions()
                 self?.refreshCodex()
                 self?.refreshCodexSessions()
+                // Piggyback the update check on this tick; the trigger no-ops unless
+                // auto-check is on and the last attempt is over 24 h old.
+                self?.updateChecker.triggerAutoCheck()
             }
         }
         t.tolerance = 15                    // let the OS coalesce wakeups
@@ -1079,6 +1113,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openSettingsClicked() { settingsWindow().show(tab: nil) }
     @objc private func openAboutClicked() { settingsWindow().show(tab: .about) }
+    @objc private func updateItemClicked() { settingsWindow().show(tab: .about) }
+
+    /// Fan the updater's state to the dropdown row and, when it is up, the About
+    /// tab. Only the row's title/isHidden change in place (safe while the menu is
+    /// open); the About controls re-render through the controller.
+    private func updateDidChange() {
+        if let title = updateChecker.menuTitle() {
+            updateItem.title = title
+            updateItem.isHidden = false
+        } else {
+            updateItem.isHidden = true
+        }
+        settingsWC?.refreshUpdateControls()
+    }
 
     private func settingsWindow() -> SettingsWindowController {
         if let wc = settingsWC { return wc }
@@ -1092,7 +1140,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // rows while up), exactly as the old menu handlers behaved.
                 codexChanged: { [weak self] in self?.renderBar() },
                 dockChanged: { [weak self] in self?.applyDockVisibility() }),
-            codexRootPath: Self.codexRootPath)
+            codexRootPath: Self.codexRootPath,
+            updater: updateChecker)
         settingsWC = wc
         return wc
     }
