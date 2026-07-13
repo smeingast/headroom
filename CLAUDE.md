@@ -37,6 +37,12 @@ projection follow the series ink. v0.10.1 (2026-07-13) keys Codex windows by
 the weekly window into `primary` and dropped `secondary` for some accounts on
 2026-07-12, so the near-term slot is now OPTIONAL everywhere (single ring, sole
 value promoted to the headline, severity and forecast keyed on the window that
-exists). Bundle id stays
+exists). v0.11 (2026-07-13) adds the in-app updater
+(`Sources/UpdateChecker.swift`, records under `design/update-mechanism/`):
+daily GitHub releases check, verified in-place install (zip preflight,
+Developer ID requirement, spctl gate, Applications-folder eligibility) and
+relaunch; release invariants live in README's maintainer section, and
+`tools/update_probe.swift` exercises the real verify/swap chain against a
+scratch bundle. Bundle id stays
 `eu.smeingast.claude-menubar-usage` unless a migration is deliberately built:
 it keys Application Support, defaults, the Keychain ACL, and the login item.
