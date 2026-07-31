@@ -47,6 +47,18 @@ enum ColorMode: String, CaseIterable {
         case .accent:     return "System accent"
         }
     }
+
+    /// Does this mode's palette say anything about severity? Monochrome paints
+    /// every value in the label color and Accent paints every value in the OS
+    /// accent, so in those two a red run would be a silent no-op. Text that must
+    /// signal severity asks this first and falls back to weight and label tier,
+    /// which is also why the ring cue is opacity rather than color.
+    var hasSeverityColor: Bool {
+        switch self {
+        case .brand, .thresholds, .heatmap: return true
+        case .monochrome, .accent:          return false
+        }
+    }
 }
 
 /// Which provider a rendered element represents in the two-provider hierarchy:
@@ -264,6 +276,14 @@ enum StatusRenderer {
     /// clearly subordinate while still legible on both bar appearances.
     static let secondaryRoleDim: CGFloat = 0.55
 
+    /// The weekly ring's resting opacity, in BOTH the menu-bar glyph and the
+    /// panel. The panel has drawn its weekly companion at 0.5 since v0.8 while
+    /// the bar drew it solid; v0.12 settles that disagreement in the panel's
+    /// favour, which also frees opacity to mean something: solid = a window in
+    /// this week is at the wall (see `image(…, weekCapped:)`). A cue needs a
+    /// resting state to depart from, and this is it.
+    static let weeklyCalmAlpha: CGFloat = 0.5
+
     /// Color for a single utilization value under the chosen mode.
     ///
     /// `provider` and `role` are dormant additions for the two-provider work: with
@@ -280,7 +300,7 @@ enum StatusRenderer {
         case .brand:
             // Red's >= 90 override wins in every mode, per provider (the one hard
             // color rule from v0.5). Below the cap, Brand hue encodes the provider.
-            return v >= 90 ? .systemRed : providerAccent(provider)
+            return Severity.isCritical(v) ? .systemRed : providerAccent(provider)
         case .monochrome: return .labelColor
         case .accent:
             // Amendment 14: dim the SECONDARY provider role via alpha, never the
@@ -289,8 +309,10 @@ enum StatusRenderer {
                 ? NSColor.controlAccentColor.withAlphaComponent(secondaryRoleDim)
                 : .controlAccentColor
         case .thresholds:
-            if v >= 90 { return .systemRed }
-            if v >= 70 { return .systemOrange }
+            // Thresholds asks the same shared predicate the rows and the header
+            // run ask, so a value that PRINTS as 90% is never left un-red.
+            if Severity.isCritical(v) { return .systemRed }
+            if Severity.isWarning(v) { return .systemOrange }
             return .labelColor
         case .heatmap:
             let t = min(max(v / 100, 0), 1)
@@ -365,11 +387,19 @@ enum StatusRenderer {
 
     // MARK: - Image rendering
 
+    /// `weekCapped` is the scoped-cap channel (v0.12): the weekly ring is drawn
+    /// at `weeklyCalmAlpha` normally and solid when SOMETHING inside the weekly
+    /// window is at the wall — the pool itself, or one of the per-model caps the
+    /// pool's own percentage cannot express. Length still means the pool and
+    /// color still means the severity of the value being drawn, so opacity is
+    /// the only property carrying the new fact. It is achromatic on purpose:
+    /// Monochrome and Accent have no severity color at all, and every
+    /// color-based alternative was invisible to those two modes.
     static func image(five: Double?, week: Double?, style: DisplayStyle, mode: ColorMode,
                       height: CGFloat = barHeight, projected: Double? = nil,
                       provider: UsageProviderKind = .claude, role: ProviderRole = .primary,
                       inferredFive: Bool = false, inferredWeek: Bool = false,
-                      singleWindow: Bool = false) -> NSImage {
+                      singleWindow: Bool = false, weekCapped: Bool = false) -> NSImage {
         let template = (mode == .monochrome)
         let track = template ? NSColor(white: 0, alpha: 0.26) : NSColor.tertiaryLabelColor
 
@@ -428,10 +458,14 @@ enum StatusRenderer {
                 // outer ring above already carries its sole value.
                 if !singleWindow {
                     if inferredWeek {
+                        // A rolled-over weekly window draws a dashed, fill-less track, so
+                        // there is no arc to carry the alpha cue -- and none is needed: a
+                        // week that has rolled has rolled its per-model caps with it.
                         strokeDashedTrack(center: c, radius: innerR, width: lw, color: track)
                     } else {
                         drawRing(center: c, radius: innerR, width: lw, value: week, mode: mode,
-                                 template: template, track: track, provider: provider, role: role)
+                                 template: template, track: track, provider: provider, role: role,
+                                 alpha: weekCapped ? 1 : weeklyCalmAlpha)
                     }
                 }
                 return true
@@ -515,11 +549,13 @@ enum StatusRenderer {
     /// (concentric inner ring) is unchanged.
     private static func drawRing(center c: CGPoint, radius: CGFloat, width lw: CGFloat,
                                  value v: Double?, mode: ColorMode, template: Bool, track: NSColor,
-                                 provider: UsageProviderKind = .claude, role: ProviderRole = .primary) {
+                                 provider: UsageProviderKind = .claude, role: ProviderRole = .primary,
+                                 alpha: CGFloat = 1) {
         stroke(arcCenter: c, radius: radius, from: 0, to: 360, clockwise: false, width: lw, color: track)
         let val = min(max((v ?? 0) / 100, 0), 1)
         if val > 0 {
-            let fill = template ? NSColor.black : color(v ?? 0, mode, provider: provider, role: role)
+            var fill = template ? NSColor.black : color(v ?? 0, mode, provider: provider, role: role)
+            if alpha < 1 { fill = fill.withAlphaComponent(alpha) }
             stroke(arcCenter: c, radius: radius, from: 90, to: 90 - 360 * val, clockwise: true, width: lw, color: fill)
         }
     }

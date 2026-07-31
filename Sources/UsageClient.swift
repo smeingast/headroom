@@ -6,12 +6,39 @@ struct LimitWindow {
     var resetsAt: Date?
 }
 
-/// A full snapshot of the account's current limit utilization.
+/// One model-scoped weekly cap, e.g. "Fable, 98% of its own weekly allowance".
+/// These arrive in the endpoint's `limits[]` array; the legacy top-level
+/// `seven_day_opus` / `seven_day_sonnet` / `seven_day_omelette` fields are null
+/// for accounts the array covers, so the array is the live source and those
+/// fields are only a fallback for accounts that predate it.
+struct ScopedLimit: Sendable {
+    var modelID: String?         // `scope.model.id`, null on every payload seen so far
+    var modelName: String        // `scope.model.display_name`, e.g. "Fable"
+    var utilization: Double      // percent, 0…100(+)
+    var resetsAt: Date?
+    var severity: String?        // server's own word ("critical"); advisory only
+    var isActive: Bool           // server's flag; decoded, never used for visibility
+}
+
+extension ScopedLimit {
+    /// Worst-first, ties broken by name. Server order is not stable and must
+    /// never decide which cap lands in which menu row.
+    static func sorted(_ limits: [ScopedLimit]) -> [ScopedLimit] {
+        limits.sorted {
+            $0.utilization == $1.utilization
+                ? $0.modelName.localizedCaseInsensitiveCompare($1.modelName) == .orderedAscending
+                : $0.utilization > $1.utilization
+        }
+    }
+}
+
+/// A full snapshot of the account's current limit utilization. `scoped` is
+/// ordered worst-first (percent descending, then name) — row assignment, the
+/// header's binding-cap run, and the goldens all depend on that being stable.
 struct UsageSnapshot {
     var fiveHour: LimitWindow?
     var sevenDay: LimitWindow?
-    var sevenDayOpus: LimitWindow?
-    var sevenDaySonnet: LimitWindow?
+    var scoped: [ScopedLimit]
     var fetchedAt: Date
 }
 
@@ -193,15 +220,25 @@ final class UsageClient {
         if http.statusCode == 401 || http.statusCode == 403 { throw UsageError.auth }
         guard http.statusCode == 200 else { throw UsageError.http(http.statusCode) }
 
-        guard let dto = try? JSONDecoder().decode(UsageDTO.self, from: data) else {
+        guard let snap = Self.decodeUsage(data, fetchedAt: Date()) else {
             throw UsageError.decode
         }
+        return snap
+    }
+
+    /// Wire bytes → snapshot. Split out from the request so the `limits[]` rules
+    /// can be tested against real captured payloads without a network stub.
+    ///
+    /// The top-level `five_hour` / `seven_day` stay primary — they are what the
+    /// app has always read and what the render goldens pin — and the array only
+    /// stands in for one of them when it is null.
+    nonisolated static func decodeUsage(_ data: Data, fetchedAt: Date) -> UsageSnapshot? {
+        guard let dto = try? JSONDecoder().decode(UsageDTO.self, from: data) else { return nil }
         return UsageSnapshot(
-            fiveHour: dto.five_hour?.window,
-            sevenDay: dto.seven_day?.window,
-            sevenDayOpus: dto.seven_day_opus?.window,
-            sevenDaySonnet: dto.seven_day_sonnet?.window,
-            fetchedAt: Date()
+            fiveHour: dto.five_hour?.window ?? dto.limit(kind: "session")?.window,
+            sevenDay: dto.seven_day?.window ?? dto.limit(kind: "weekly_all")?.window,
+            scoped: dto.scopedLimits,
+            fetchedAt: fetchedAt
         )
     }
 
@@ -344,6 +381,90 @@ private struct UsageDTO: Decodable {
     let seven_day: WindowDTO?
     let seven_day_opus: WindowDTO?
     let seven_day_sonnet: WindowDTO?
+    let seven_day_omelette: WindowDTO?      // Fable's legacy slot, by its codename
+    let limits: [Lossy<LimitDTO>]?
+
+    /// The first `limits[]` entry of this kind, used only to stand in for a null
+    /// top-level `five_hour` / `seven_day`. The top-level fields stay primary:
+    /// they are what every golden pins and what the app has always read.
+    func limit(kind: String) -> LimitDTO? {
+        limits?.compactMap(\.value).first { $0.kind == kind }
+    }
+
+    /// Model-scoped weekly caps, worst-first. `limits[]` wins when it is present
+    /// and carries any scoped entry; the legacy per-model fields are consulted
+    /// only when the array is absent or unusable. A present-but-empty array
+    /// means "this account has no scoped caps" and must NOT resurrect the legacy
+    /// fields.
+    var scopedLimits: [ScopedLimit] {
+        if let limits {
+            let decoded = limits.compactMap(\.value)
+            let entries = decoded.filter { $0.kind == "weekly_scoped" }
+            let usable = entries.compactMap(\.scopedLimit)
+            if !usable.isEmpty { return ScopedLimit.sorted(usable) }
+            // An element we could not decode AT ALL never reached `entries`, so
+            // "no scoped entries" would be a lie about an array we half-read.
+            let cleanlyParsed = decoded.count == limits.count
+            // No scoped ENTRIES at all is the server saying this account has no
+            // per-model caps, and is authoritative: inventing caps out of the
+            // fields the array replaced would contradict it.
+            //
+            // Entries that exist but are all unusable is a different thing — a
+            // shape we failed to read — and there the legacy fields are the
+            // better answer than showing the user nothing.
+            if entries.isEmpty && cleanlyParsed { return [] }
+        }
+        let legacy = [(seven_day_opus, "Opus"), (seven_day_sonnet, "Sonnet"),
+                      (seven_day_omelette, "Fable")]
+        return ScopedLimit.sorted(legacy.compactMap { dto, name in
+            guard let w = dto?.window else { return nil }
+            return ScopedLimit(modelID: nil, modelName: name, utilization: w.utilization,
+                               resetsAt: w.resetsAt, severity: nil, isActive: false)
+        })
+    }
+}
+
+/// One `limits[]` entry. Every field is optional because the array's shape is
+/// observed, not documented: an entry we cannot use is dropped, never fatal.
+private struct LimitDTO: Decodable {
+    let kind: String?
+    let percent: Double?
+    let resets_at: String?
+    let severity: String?
+    let is_active: Bool?
+    let scope: ScopeDTO?
+
+    struct ScopeDTO: Decodable {
+        struct ModelDTO: Decodable {
+            let id: String?
+            let display_name: String?
+        }
+        let model: ModelDTO?
+    }
+
+    var window: LimitWindow? {
+        guard let percent, percent.isFinite, percent >= 0 else { return nil }
+        return LimitWindow(utilization: percent, resetsAt: ISO.parse(resets_at))
+    }
+
+    /// A usable scoped cap needs a finite percentage and a name to show. An
+    /// unnamed scope cannot be rendered as "Weekly · <name>", so it is dropped
+    /// rather than labelled with a guess.
+    var scopedLimit: ScopedLimit? {
+        guard let percent, percent.isFinite, percent >= 0,
+              let name = scope?.model?.display_name?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty else { return nil }
+        return ScopedLimit(modelID: scope?.model?.id, modelName: name, utilization: percent,
+                           resetsAt: ISO.parse(resets_at), severity: severity,
+                           isActive: is_active ?? false)
+    }
+}
+
+/// Decodes `T`, or nothing, without failing its container. One malformed entry
+/// in `limits[]` must not cost us the whole usage response.
+private struct Lossy<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws { value = try? T(from: decoder) }
 }
 
 private struct WindowDTO: Decodable {

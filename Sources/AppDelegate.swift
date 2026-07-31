@@ -57,8 +57,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let pillsView = RangeModePillsView(frame: NSRect(x: 0, y: 0, width: PanelStyle.width,
                                                              height: RangeModePillsView.height))
     private let pillsItem = NSMenuItem()
-    private let opusItem = NSMenuItem()
-    private let sonnetItem = NSMenuItem()
+    /// Per-model weekly cap rows. Pre-allocated and only shown/hidden, never
+    /// added while the menu is open.
+    ///
+    /// `capRowCount` is the SOFT budget — the point past which caps collapse
+    /// into `capsOverflowItem`. `capRowPool` is the hard ceiling, because a cap
+    /// near the wall is never collapsed and a pathological account can therefore
+    /// push past the budget. The pool must be the larger number or those rescued
+    /// rows would have no menu item to live in and would vanish silently, which
+    /// is the exact failure this feature exists to fix.
+    nonisolated static let capRowCount = 10
+    nonisolated static let capRowPool = 16
+    private let capItems = (0..<AppDelegate.capRowPool).map { _ in NSMenuItem() }
+    private let capsOverflowItem = NSMenuItem()
 
     // Two-provider panel chrome (package 4b): a provider tag row ABOVE the instrument,
     // the compact secondary strip, and the graph provider pill. All hidden in
@@ -276,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(headerItem)
 
         // Model-specific weekly rows (shown only when Claude is primary and in use).
-        for item in [opusItem, sonnetItem] {
+        for item in capItems + [capsOverflowItem] {
             item.isEnabled = false
             item.isHidden = true
             menu.addItem(item)
@@ -704,13 +715,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             func claudeGlyph() -> NSImage {
                 StatusRenderer.image(five: cFive, week: cWeek, style: style, mode: mode,
-                                     projected: forecast?.projected, provider: .claude)
+                                     projected: forecast?.projected, provider: .claude,
+                                     weekCapped: snapshot?.weeklyGroupCapped ?? false)
             }
             func codexGlyph() -> NSImage {
                 StatusRenderer.image(five: xFive, week: xWeek, style: style, mode: mode,
                                      projected: xProj, provider: .codex,
                                      inferredFive: xInfF, inferredWeek: xInfW,
-                                     singleWindow: xSingle)
+                                     singleWindow: xSingle,
+                                     weekCapped: codexUsage?.snapshot?.weeklyGroupCapped ?? false)
             }
             let img: NSImage
             switch bar {
@@ -808,7 +821,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             fiveResetRel: resetsAt.map { "in \(Self.rel($0.timeIntervalSince(now)))" },
             weekResetAbs: snapshot?.secondary?.resetsAt.map { "resets \(Self.weeklyResetFormatter.string(from: $0))" },
             weekResetRel: snapshot?.secondary?.resetsAt.map { "in \(Self.rel($0.timeIntervalSince(now)))" },
-            signedOut: needsAuth))
+            signedOut: needsAuth,
+            weekCapped: snapshot?.weeklyGroupCapped ?? false,
+            weekBindingCap: weekBindingCapText(now: now)))
     }
 
     /// Configure the two-provider instrument: the primary provider's tag row, rings +
@@ -838,7 +853,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             fiveResetRel: resetsAt.map { "in \(Self.rel($0.timeIntervalSince(now)))" },
             weekResetAbs: snapshot?.secondary?.resetsAt.map { "resets \(Self.weeklyResetFormatter.string(from: $0))" },
             weekResetRel: snapshot?.secondary?.resetsAt.map { "in \(Self.rel($0.timeIntervalSince(now)))" },
-            signedOut: needsAuth, provider: .claude))
+            signedOut: needsAuth, provider: .claude,
+            weekCapped: snapshot?.weeklyGroupCapped ?? false,
+            weekBindingCap: weekBindingCapText(now: now)))
+    }
+
+    /// The header's weekly slot swaps its relative-time line for the binding cap
+    /// when one exists. With exactly one critical cap the run NAMES it, because
+    /// the user's move is obvious: stop using that model. With two or more it
+    /// counts instead — naming only the worst would imply that switching away
+    /// from it solves the problem, when the next model is also at the wall.
+    ///
+    /// The relative time is kept alongside, compacted: it is the one fact in
+    /// that slot stated nowhere else, and "how long until this lifts" is exactly
+    /// what someone who has just been blocked wants. The cap name, by contrast,
+    /// is repeated in the row directly beneath.
+    private func weekBindingCapText(now: Date) -> String? {
+        guard let snap = snapshot, !needsAuth else { return nil }
+        let caps = snap.criticalCaps
+        guard !caps.isEmpty else { return nil }
+        let rel = snap.secondary?.resetsAt.map { Self.compactRel($0.timeIntervalSince(now)) }
+        let head: String
+        if caps.count == 1 {
+            // "Claude " is noise here: every cap in this section is Claude's, and
+            // the prefix is the first thing to go when 96 pt gets tight.
+            let name = caps[0].title
+                .replacingOccurrences(of: "Weekly · ", with: "")
+                .replacingOccurrences(of: "Claude ", with: "")
+            head = "\(name) \(Self.percent(caps[0].utilization))"
+        } else {
+            head = "\(caps.count) caps ≥ \(Severity.critical)%"
+        }
+        // Degrade in a fixed order rather than truncating whatever lands last:
+        // full form, then drop the duration, then middle-truncate the name, then
+        // give up on the name entirely and count.
+        let candidates = [rel.map { "\(head) · \($0)" }, head,
+                          caps.count == 1 ? Self.middleTruncated(head, budget: Self.bindingCapBudget) : nil,
+                          "\(caps.count) cap\(caps.count == 1 ? "" : "s") ≥ \(Severity.critical)%"]
+        return candidates.compactMap { $0 }.first { Self.bindingCapFits($0) }
+    }
+
+    /// The right-aligned slot in the header, minus the space the weekly number
+    /// and a gap need: 360 panel − 125 chrome − 52 label − 45 for a worst-case
+    /// "100%" − 8 gap.
+    nonisolated static let bindingCapBudget: CGFloat = 130
+
+    nonisolated static func bindingCapFits(_ s: String) -> Bool {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        return (s as NSString).size(withAttributes: [.font: font]).width <= bindingCapBudget
+    }
+
+    /// Middle truncation keeps the version suffix, which is usually the part
+    /// that distinguishes one model from another ("Fable 5 Preview").
+    nonisolated static func middleTruncated(_ s: String, budget: CGFloat) -> String {
+        guard !bindingCapFits(s) else { return s }
+        var chars = Array(s)
+        while chars.count > 6 {
+            let mid = chars.count / 2
+            chars.remove(at: mid)
+            let candidate = String(chars[0..<mid]) + "…" + String(chars[mid...])
+            if bindingCapFits(candidate) { return candidate }
+        }
+        return s
+    }
+
+    /// "2d" / "3h" / "45m" — the header slot has no room for "in 2 days".
+    nonisolated static func compactRel(_ interval: TimeInterval) -> String {
+        let s = max(0, Int(interval))
+        if s >= 86400 { return "\(Int((Double(s) / 86400).rounded()))d" }
+        if s >= 3600 { return "\(s / 3600)h" }
+        return "\(s / 60)m"
     }
 
     private func configureCodexPrimary(now: Date) {
@@ -864,7 +948,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             fiveTitle: cd?.fiveTitle ?? "5-hour",
             weekTitle: cd?.weekTitle ?? "Weekly",
             weekIsRed: cd?.weekIsRed ?? false,
-            hideFive: codexHidesFive()))
+            hideFive: codexHidesFive(),
+            weekCapped: codexUsage?.snapshot?.weeklyGroupCapped ?? false))
     }
 
     /// Whether the Codex surfaces should drop their near-term slot: only when there IS
@@ -924,25 +1009,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             rawWeekPct: (cd?.inferredWeek ?? false) ? cd?.rawWeek.map { Int($0.rounded()) } : nil,
             resetLine: resetLine, subBanner: sub, otherLabel: "Claude",
             fiveUnit: cd?.fiveUnit ?? "5h", weekUnit: cd?.weekUnit ?? "wk",
-            weekIsRed: cd?.weekIsRed ?? false, hideFive: codexHidesFive())
+            weekIsRed: cd?.weekIsRed ?? false, hideFive: codexHidesFive(),
+            weekCapped: codexUsage?.snapshot?.weeklyGroupCapped ?? false)
     }
 
     private func claudeStripModel(now: Date) -> StripModel {
         let cd = claudeDerived
         let hasData = snapshot != nil && !needsAuth
-        var resetLine: String? = nil
-        if hasData, let fr = snapshot?.primary?.resetsAt {
-            var s = "resets \(Self.dailyResetFormatter.string(from: fr)) \u{00B7} \(Self.rel(fr.timeIntervalSince(now)))"
-            // Amendment 8: warning-relevant model caps ride along on the reset line
-            // when Claude is secondary (its dedicated extras rows are hidden).
-            if let opus = snapshot?.extra("opus"), opus.utilization > 0 {
-                s += " \u{00B7} Opus \(Int(opus.utilization.rounded()))%"
-            }
-            if let sonnet = snapshot?.extra("sonnet"), sonnet.utilization > 0 {
-                s += " \u{00B7} Sonnet \(Int(sonnet.utilization.rounded()))%"
-            }
-            resetLine = s
-        }
+        // Amendment 8: model caps ride along on this line when Claude is secondary,
+        // since its dedicated rows are hidden. The cap runs are built INDEPENDENTLY
+        // of the 5-hour reset: they come from `limits[]`, not from the session
+        // window, and a missing reset must not take a 98% cap down with it.
+        let resetLine: String? = hasData
+            ? Self.claudeStripSubLine(snapshot,
+                                      resetsAt: snapshot?.primary?.resetsAt,
+                                      formatter: Self.dailyResetFormatter)
+            : nil
         return StripModel(
             provider: .claude, label: "Claude", planType: nil,
             showLocalChip: false, hasData: hasData,
@@ -951,7 +1033,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             five: snapshot?.primary?.utilization, week: snapshot?.secondary?.utilization,
             mode: Settings.colorMode, fiveIsRed: cd?.isRed ?? false,
             inferredFive: false, inferredWeek: false, rawFivePct: nil, rawWeekPct: nil,
-            resetLine: resetLine, subBanner: nil, otherLabel: "Codex")
+            resetLine: resetLine, subBanner: nil, otherLabel: "Codex",
+            weekCapped: snapshot?.weeklyGroupCapped ?? false)
+    }
+
+    /// The collapsed strip's sub-line: "resets 12:30 · Fable 98% · +3 caps".
+    ///
+    /// ONE cap, at its full name, never two. The collapsed strip answers a single
+    /// binary question — do I need to expand this provider? — and two names
+    /// truncated to fit answer it no better than one readable one, because the
+    /// truncation eats the model suffix and leaves two identical vendor
+    /// prefixes. The count covers everything else, and counts ALL other caps
+    /// (not just critical ones) so the number never changes meaning.
+    ///
+    /// The derived relative time is dropped here for the same reason the header
+    /// drops it: it restates the absolute time beside it, and the width buys a
+    /// readable model name instead.
+    nonisolated static func claudeStripSubLine(_ snap: ProviderUsageSnapshot?,
+                                               resetsAt: Date?,
+                                               formatter: DateFormatter) -> String? {
+        var parts: [String] = []
+        if let resetsAt { parts.append("resets \(formatter.string(from: resetsAt))") }
+        let caps = (snap?.extras ?? []).filter { $0.utilization > 0 }
+        // Nothing near the wall and this provider is not the one being watched:
+        // the names are noise, so state only how many exist.
+        if let lead = caps.first, Severity.isWarning(lead.utilization) {
+            let name = lead.title.replacingOccurrences(of: "Weekly · ", with: "")
+            parts.append("\(name) \(percent(lead.utilization))")
+            if caps.count > 1 { parts.append("+\(caps.count - 1) caps") }
+        } else if !caps.isEmpty {
+            parts.append("\(caps.count) cap\(caps.count == 1 ? "" : "s")")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
     }
 
     /// The Opus/Sonnet weekly rows appear only when Claude is the primary instrument
@@ -960,13 +1073,143 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// compact extras instead).
     private func configureExtrasRows() {
         let claudePrimary = !twoProvider || Settings.primaryProvider == .claude
-        if claudePrimary, let snap = snapshot {
-            configureModelRow(opusItem, label: "Weekly · Opus", snap.extra("opus"))
-            configureModelRow(sonnetItem, label: "Weekly · Sonnet", snap.extra("sonnet"))
-        } else {
-            opusItem.isHidden = true
-            sonnetItem.isHidden = true
+        let visible = Self.visibleCaps(claudePrimary ? snapshot : nil)
+        for (i, item) in capItems.enumerated() {
+            if i < visible.rows.count {
+                item.isHidden = false
+                item.attributedTitle = Self.capRowTitle(visible.rows[i],
+                                                        poolResetsAt: snapshot?.secondary?.resetsAt,
+                                                        mode: Settings.colorMode,
+                                                        resetFormatter: Self.weeklyResetFormatter)
+            } else {
+                item.isHidden = true
+            }
         }
+        if visible.hiddenCeiling > 0 {
+            capsOverflowItem.isHidden = false
+            capsOverflowItem.attributedTitle = Self.capsOverflowTitle(
+                count: visible.hidden, ceiling: visible.hiddenCeiling)
+        } else {
+            capsOverflowItem.isHidden = true
+        }
+    }
+
+    /// Which cap rows to draw, and what the overflow line has to admit to.
+    ///
+    /// Caps at 0% never show — a model you have not used is not news. Past the
+    /// row budget the list is cut, EXCEPT that a cap at or above the warning
+    /// threshold is never hidden: burying a model at 72% to keep the menu tidy
+    /// is exactly the blindness this whole change exists to fix, so a
+    /// pathological account grows a row or two instead.
+    nonisolated static func visibleCaps(_ snap: ProviderUsageSnapshot?)
+        -> (rows: [UsageWindow], hidden: Int, hiddenCeiling: Int) {
+        guard let snap else { return ([], 0, 0) }
+        let caps = snap.extras.filter { $0.utilization > 0 }
+        guard caps.count > capRowCount else { return (caps, 0, 0) }
+        var keep = Array(caps.prefix(capRowCount))
+        let rest = Array(caps.dropFirst(capRowCount))
+        // A cap near the wall is rescued past the budget — but never past the
+        // pool, which has no room for it.
+        let rescued = rest.filter { Severity.isWarning($0.utilization) }
+            .prefix(capRowPool - keep.count)
+        keep += rescued
+        let keptIDs = Set(keep.map(\.id))
+        let hidden = rest.filter { !keptIDs.contains($0.id) }
+        guard let worst = hidden.map(\.utilization).max() else { return (keep, 0, 0) }
+        // The next multiple of 5 STRICTLY above the worst hidden value, so the
+        // line is literally true: a worst of 20 must not claim "all under 20%".
+        // The point of naming a ceiling instead of a bare count is to let the
+        // user stop wondering what is behind the line.
+        let ceiling = max(5, (Int(floor(worst / 5)) + 1) * 5)
+        return (keep, hidden.count, ceiling)
+    }
+
+    /// One cap row: "Weekly · Fable — 98%".
+    ///
+    /// The severity cue is the ROW, not the number: a critical row goes semibold
+    /// with its name at full contrast while calm rows keep theirs recessed, so
+    /// one bright line stands out of a dim list. That reads in every color mode,
+    /// including Monochrome and Accent, where a red run would say nothing at
+    /// all. The percentage keeps its mode's value color in both states.
+    ///
+    /// No reset text: every weekly cap resets with the pool, so repeating the
+    /// pool's reset on each row spent ~100 pt per row restating the header. It
+    /// comes back only for a cap that genuinely resets at another time.
+    nonisolated static func capRowTitle(_ w: UsageWindow, poolResetsAt: Date?,
+                                        mode: ColorMode,
+                                        resetFormatter: DateFormatter) -> NSAttributedString {
+        let critical = Severity.isCritical(w.utilization)
+        let base = NSFont.menuFont(ofSize: 0)
+        let size = base.pointSize
+        let nameFont = critical ? NSFont.systemFont(ofSize: size, weight: .semibold) : base
+        let numFont = NSFont.monospacedDigitSystemFont(ofSize: size,
+                                                       weight: critical ? .semibold : .regular)
+        // Model names come from the server and are not length-bounded. NSMenu sizes
+        // itself to its widest item, so an unbounded name would widen the whole panel
+        // past the 360 pt every other row is laid out against. The name yields;
+        // the percentage and the reset never do.
+        let reset = capRowResetText(w, poolResetsAt: poolResetsAt, formatter: resetFormatter)
+        let tail = " — \(percent(w.utilization))" + (reset.map { "  ·  \($0)" } ?? "")
+        let budget = capRowWidth - textWidth(tail, font: numFont)
+        let name = truncatedToFit(w.title, font: nameFont, budget: budget)
+
+        let s = NSMutableAttributedString()
+        s.append(NSAttributedString(string: name, attributes: [
+            .font: nameFont,
+            .foregroundColor: critical ? NSColor.labelColor : NSColor.secondaryLabelColor]))
+        s.append(NSAttributedString(string: " — ", attributes: [
+            .font: base, .foregroundColor: NSColor.tertiaryLabelColor]))
+        s.append(NSAttributedString(string: percent(w.utilization), attributes: [
+            .font: numFont,
+            .foregroundColor: StatusRenderer.color(w.utilization, mode)]))
+        if let reset {
+            s.append(NSAttributedString(string: "  ·  ", attributes: [
+                .font: base, .foregroundColor: NSColor.tertiaryLabelColor]))
+            s.append(NSAttributedString(string: reset, attributes: [
+                .font: base, .foregroundColor: NSColor.secondaryLabelColor]))
+        }
+        return s
+    }
+
+    /// A cap row states its own reset ONLY when that reset differs from the
+    /// pool's. Compared as absolute instants with a tolerance, never as
+    /// formatted strings: a string compare would both hide a genuine week-apart
+    /// difference that happens to format identically, and surface sub-second
+    /// server jitter as a difference worth 100 pt of row.
+    nonisolated static func capRowResetText(_ w: UsageWindow, poolResetsAt: Date?,
+                                            formatter: DateFormatter) -> String? {
+        guard let capReset = w.resetsAt else { return nil }
+        if let poolResetsAt, abs(capReset.timeIntervalSince(poolResetsAt)) < 60 { return nil }
+        return "resets \(formatter.string(from: capReset))"
+    }
+
+    /// Row text budget: the 360 pt panel less the menu's own leading/trailing
+    /// insets. Every cap row is laid out against this so the menu never grows
+    /// wider than the header and graph rows already pin it to.
+    nonisolated static let capRowWidth: CGFloat = 330
+
+    nonisolated static func textWidth(_ s: String, font: NSFont) -> CGFloat {
+        (s as NSString).size(withAttributes: [.font: font]).width
+    }
+
+    /// Middle truncation, which keeps the version suffix that usually
+    /// distinguishes one model from another ("Fable 5 Preview").
+    nonisolated static func truncatedToFit(_ s: String, font: NSFont, budget: CGFloat) -> String {
+        guard textWidth(s, font: font) > budget, budget > 0 else { return s }
+        var chars = Array(s)
+        while chars.count > 6 {
+            let mid = chars.count / 2
+            chars.remove(at: mid)
+            let candidate = String(chars[0..<mid]) + "…" + String(chars[mid...])
+            if textWidth(candidate, font: font) <= budget { return candidate }
+        }
+        return String(chars)
+    }
+
+    nonisolated static func capsOverflowTitle(count: Int, ceiling: Int) -> NSAttributedString {
+        NSAttributedString(string: "+\(count) more  ·  all under \(ceiling)%", attributes: [
+            .font: NSFont.menuFont(ofSize: 0),
+            .foregroundColor: NSColor.tertiaryLabelColor])
     }
 
     /// The status line. Claude-only keeps today's plain string (amendment 12); two-
@@ -1360,7 +1603,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Rounded integer percent, em-dash for a missing value.
     nonisolated static func percent(_ v: Double?) -> String {
         guard let v else { return "—" }
-        return "\(Int(v.rounded()))%"
+        // Via the shared predicate's clamp: `Int(_:)` traps past `Int.max`, and
+        // these values come off the wire.
+        return "\(Severity.displayed(v))%"
     }
 
     /// "resets <time>" for a window's reset instant, nil when there is none. The
@@ -1390,6 +1635,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var lines = ["Claude usage"]
         if let f = snap.primary { lines.append("5-hour: \(percent(f.utilization))") }
         if let w = snap.secondary { lines.append("Weekly: \(percent(w.utilization))") }
+        // Only the caps at the wall, and at most three of them: the tooltip is
+        // the glyph's explanation of why its weekly ring went solid, not a second
+        // copy of the panel.
+        let critical = snap.criticalCaps
+        for cap in critical.prefix(3) { lines.append("\(cap.title): \(percent(cap.utilization))") }
+        if critical.count > 3 { lines.append("+\(critical.count - 3) more") }
         if let e = lastError { lines.append("⚠ \(e)") }
         return lines.joined(separator: "\n")
     }

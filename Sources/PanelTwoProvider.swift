@@ -22,7 +22,8 @@ enum PanelRings {
     static func draw(in rect: NSRect, five: Double?, week: Double?, projected: Double?,
                      mode: ColorMode, provider: UsageProviderKind, role: ProviderRole = .primary,
                      inferredFive: Bool = false, inferredWeek: Bool = false,
-                     signedOut: Bool = false, singleWindow: Bool = false) {
+                     signedOut: Bool = false, singleWindow: Bool = false,
+                     weekCapped: Bool = false) {
         let size = rect.width
         let lw = size * 0.092
         let c = NSPoint(x: rect.midX, y: rect.midY)
@@ -101,9 +102,14 @@ enum PanelRings {
             dashedTrack(rI)
         } else {
             trackRing(rI)
+            // Solid when a window inside this week is at the wall (the pool itself,
+            // or a per-model cap the pool's percentage cannot express). Same rule and
+            // same constant as the menu-bar glyph, so the panel confirms the surface
+            // the user clicked from rather than restating it differently.
+            let weekAlpha: CGFloat = weekCapped ? 1 : StatusRenderer.weeklyCalmAlpha
             let weekColor: NSColor = (mode == .brand && provider == .codex)
-                ? StatusRenderer.codexTealWeekly.withAlphaComponent(0.5)
-                : StatusRenderer.color(week ?? 0, mode, provider: provider, role: role).withAlphaComponent(0.5)
+                ? StatusRenderer.codexTealWeekly.withAlphaComponent(weekAlpha)
+                : StatusRenderer.color(week ?? 0, mode, provider: provider, role: role).withAlphaComponent(weekAlpha)
             arc(radius: rI, frac: (week ?? 0) / 100, color: weekColor)
         }
     }
@@ -354,6 +360,10 @@ struct StripModel {
     var weekUnit: String = "wk"
     var weekIsRed: Bool = false
     var hideFive: Bool = false    // no near-term window: drop its figure, promote the other
+    /// Something inside this provider's weekly window is at the wall, so its ring
+    /// is drawn solid. Same rule and same constant as the menu-bar glyph and the
+    /// primary header: all three surfaces must agree, or the cue reads as noise.
+    var weekCapped: Bool = false
 }
 
 @MainActor
@@ -415,7 +425,8 @@ final class StripView: NSView {
                         week: m.hasData ? (m.week ?? 0) : nil, projected: nil,
                         mode: m.mode, provider: m.provider, role: .secondary,
                         inferredFive: m.inferredFive, inferredWeek: m.inferredWeek,
-                        signedOut: !m.hasData, singleWindow: m.hideFive)
+                        signedOut: !m.hasData, singleWindow: m.hideFive,
+                        weekCapped: m.weekCapped)
 
         // Lead button, right. Drawn first so the text column knows its right edge.
         let leadFont = NSFont.systemFont(ofSize: 10.5, weight: .semibold)

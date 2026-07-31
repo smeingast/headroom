@@ -1,8 +1,30 @@
-# Menu-bar render goldens (pixel parity, package 4a)
+# Menu-bar render goldens (pixel parity)
 
-These fixtures pin the **pre-package-4a** `StatusRenderer` output, captured while
-`Sources/StatusRenderer.swift` was at commit **`00c7d6a`** ("Codex sessions:
-interactive rows + exec summary"), before any package-4a rendering change.
+These fixtures pin `StatusRenderer` output so that any UNINTENDED rendering
+drift fails the build.
+
+## Baseline history
+
+The corpus was captured twice, both times deliberately:
+
+1. **Pre-package-4a** (`StatusRenderer.swift` at commit `00c7d6a`, "Codex
+   sessions: interactive rows + exec summary"), to prove package 4a's new
+   rendering parameters were dormant.
+2. **v0.12, scoped model caps** — the current baseline. The weekly ring's
+   resting alpha in the MENU-BAR glyph moved from 1.0 to
+   `StatusRenderer.weeklyCalmAlpha` (0.5), matching what the panel had drawn
+   since v0.8 and freeing opacity to signal "a window inside this week is at the
+   wall". This is a visible change and was made on purpose.
+
+   Exactly **50 of 320** cells moved: every `concentric` cell whose week value is
+   non-nil and non-zero (5 such values x 5 modes x 2 appearances). No `single`,
+   `bars` or `percentages` cell moved, and no concentric cell with a nil or zero
+   week moved — which is the proof that only the weekly arc changed. Re-verify
+   that arithmetic before ever regenerating again: a drift count that is not
+   explained cell-for-cell is a bug, not a baseline.
+
+The package-4a dormancy claim below still describes what the corpus tests; only
+the pixels it compares against have moved.
 
 The package-4a work adds new, dormant rendering parameters (a `provider` and
 `role` on the color resolver, glyph pip / "Both" / dashed-track variants, and the
@@ -49,6 +71,11 @@ values).
 
 An ordinary `swift test` **never** rewrites these (the capture test is skipped
 without the env var), so the parity test always compares new code against the
-frozen pre-4a pixels. Determinism was verified by capturing twice and confirming
-a byte-identical directory (`diff -rq`), and that aqua vs darkAqua and the
-color modes each produce distinct pixels.
+frozen pixels. Determinism was verified by capturing twice and confirming a
+byte-identical directory (`diff -rq`), and that aqua vs darkAqua and the color
+modes each produce distinct pixels.
+
+**The capture DELETES this file.** It rewrites the directory wholesale, so
+restore the README (`git checkout`) after any regeneration and record what moved
+and why in the baseline history above. A regeneration with no note is
+indistinguishable from an accident.

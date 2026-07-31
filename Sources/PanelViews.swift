@@ -88,6 +88,15 @@ struct PanelHeaderModel {
     /// NOT inferred from `five == nil`: a signed-out Claude also has no value, and it
     /// must keep showing both labeled rows.
     var hideFive: Bool = false
+    /// Something inside the weekly window is at the wall — the pool itself, or a
+    /// per-model cap. Draws the weekly ring solid instead of at its resting
+    /// alpha, matching the menu-bar glyph (v0.12).
+    var weekCapped: Bool = false
+    /// Replaces the weekly slot's relative-time line when a scoped cap is
+    /// critical, e.g. "Fable 98% · 2d". That line is otherwise the only run in
+    /// the header derived entirely from the absolute reset directly above it, so
+    /// it is the one place a new fact fits at zero layout cost.
+    var weekBindingCap: String? = nil
 }
 
 /// The instrument: concentric rings (outer = 5-hour, inner = weekly, same
@@ -179,11 +188,19 @@ final class PanelHeaderView: NSView {
 
         let line2Y: CGFloat = 54
         PanelStyle.draw(m.weekTitle, at: NSPoint(x: x0, y: line2Y + 4), font: labelFont, color: .secondaryLabelColor)
+        // The weekly number stays calm. Tinting it would put a severity color on a
+        // value that is not severe: 82% of the pool is true, and it still governs
+        // every model that is not capped.
         PanelStyle.draw(pct(m.week), at: NSPoint(x: x0 + 52, y: line2Y), font: midFont, color: .secondaryLabelColor)
         if let abs = m.weekResetAbs {
             PanelStyle.drawRight(abs, rightEdge: rightEdge, y: line2Y, font: resetFont, color: .tertiaryLabelColor)
         }
-        if let rel = m.weekResetRel {
+        // The binding cap displaces the relative time, which is derived from the
+        // absolute reset on the line above it and so carries nothing unique.
+        if let cap = m.weekBindingCap {
+            let color: NSColor = Settings.colorMode.hasSeverityColor ? .systemRed : .labelColor
+            PanelStyle.drawRight(cap, rightEdge: rightEdge, y: line2Y + 14, font: resetBold, color: color)
+        } else if let rel = m.weekResetRel {
             PanelStyle.drawRight(rel, rightEdge: rightEdge, y: line2Y + 14, font: resetBold, color: .secondaryLabelColor)
         }
     }
@@ -198,7 +215,8 @@ final class PanelHeaderView: NSView {
         PanelRings.draw(in: rect, five: m.five, week: m.week, projected: m.projected,
                         mode: Settings.colorMode, provider: m.provider,
                         inferredFive: m.inferredFive, inferredWeek: m.inferredWeek,
-                        signedOut: m.signedOut, singleWindow: m.hideFive)
+                        signedOut: m.signedOut, singleWindow: m.hideFive,
+                        weekCapped: m.weekCapped)
     }
 }
 

@@ -43,6 +43,21 @@ daily GitHub releases check, verified in-place install (zip preflight,
 Developer ID requirement, spctl gate, Applications-folder eligibility) and
 relaunch; release invariants live in README's maintainer section, and
 `tools/update_probe.swift` exercises the real verify/swap chain against a
-scratch bundle. Bundle id stays
+scratch bundle. v0.12 (2026-07-31) adds Claude's model-scoped weekly caps
+(`design/claude-scoped-limits/plan.md`): the usage endpoint now reports them in
+a `limits[]` array while the legacy `seven_day_opus` / `_sonnet` /
+`_omelette` fields sit null, so an account could be 2 points from a Fable
+block while the app showed a calm weekly 82%. Caps become
+`ProviderUsageSnapshot.extras` (worst-first, ids from the model name), the menu
+rows are a dynamic pool, and the weekly ring gained an OPACITY channel:
+`StatusRenderer.weeklyCalmAlpha` (0.5) at rest, solid when anything in the
+weekly group is >= 90. That is achromatic on purpose — Monochrome and Accent
+have no severity color, so every ink-based cue was invisible to them — and it
+also settled a v0.8 split where the bar drew the weekly ring solid while the
+panel drew it at 0.5. `Severity` (Providers.swift) is now the ONE threshold
+predicate, evaluated on the DISPLAYED (rounded) percentage so a value printing
+as "90%" can never render as calm. The render goldens were regenerated
+deliberately; their README records the new baseline and the cell-by-cell proof
+that only the weekly arc moved. Bundle id stays
 `eu.smeingast.claude-menubar-usage` unless a migration is deliberately built:
 it keys Application Support, defaults, the Keychain ACL, and the login item.

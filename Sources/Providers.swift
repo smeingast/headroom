@@ -27,6 +27,30 @@ struct UsageWindow: Sendable {
     var resetsAt: Date?
 }
 
+/// The app's severity thresholds, in ONE place. Every surface — the rings, the
+/// model rows, the header's binding-cap run, the strip, the tooltip, the
+/// overflow rule — asks these, so they cannot drift apart.
+///
+/// They are evaluated on the DISPLAYED value, i.e. the percentage after
+/// rounding. Testing the raw `Double` instead lets 89.6 render as "90%" while
+/// receiving none of the red, the weight, or the emphasis that 90 is supposed
+/// to earn — the app would visibly contradict its own threshold.
+enum Severity {
+    static let warning = 70
+    static let critical = 90
+
+    /// The integer the UI will actually print for this value. Clamped, because
+    /// `Int(_:)` TRAPS on a value past `Int.max` and these numbers come off the
+    /// wire: a nonsense percentage must render as nonsense, not crash the app.
+    static func displayed(_ v: Double) -> Int {
+        guard v.isFinite else { return 0 }
+        return Int(min(max(v.rounded(), 0), 1_000_000))
+    }
+
+    static func isCritical(_ v: Double) -> Bool { displayed(v) >= critical }
+    static func isWarning(_ v: Double) -> Bool { displayed(v) >= warning }
+}
+
 /// How trustworthy a snapshot's numbers are right now. Claude snapshots are always
 /// `.live` (a server round-trip completed this instant); Codex snapshots are
 /// `.observed(eventTime)` and derive their displayed value from that event time
@@ -52,8 +76,24 @@ struct ProviderUsageSnapshot: Sendable {
 }
 
 extension ProviderUsageSnapshot {
-    /// The extra window with this id, or nil. Claude uses "opus" / "sonnet".
+    /// The extra window with this id, or nil. Claude ids scoped caps by model.
     func extra(_ id: String) -> UsageWindow? { extras.first { $0.id == id } }
+
+    /// Is anything inside the weekly window at the wall — the pool itself, or
+    /// one of the per-model caps? This is the fact the weekly ring's opacity
+    /// carries, and the trigger for the header's binding-cap run. Codex has no
+    /// scoped caps, so for Codex this is simply "its weekly window is critical".
+    var weeklyGroupCapped: Bool {
+        if let w = secondary, Severity.isCritical(w.utilization) { return true }
+        return extras.contains { Severity.isCritical($0.utilization) }
+    }
+
+    /// Scoped caps at or past the critical threshold, worst first. One of these
+    /// gets named in the header; two or more collapse to a count, because naming
+    /// the worst would imply switching away from it solves the problem.
+    var criticalCaps: [UsageWindow] {
+        extras.filter { Severity.isCritical($0.utilization) }
+    }
 }
 
 /// A live/recent session in provider-generic form: a superset of Claude's
@@ -121,9 +161,9 @@ extension ProviderUsageSnapshot {
     /// by the golden tests and every downstream reader:
     ///
     /// - field PRESENCE is preserved exactly: `fiveHour` → `primary`,
-    ///   `sevenDay` → `secondary`, `sevenDayOpus`/`sevenDaySonnet` → `extras` in
-    ///   that order with ids "opus" / "sonnet". A nil window stays nil (an absent
-    ///   extra is simply omitted); nothing is coerced to 0.
+    ///   `sevenDay` → `secondary`, each scoped cap → an `extras` entry, worst
+    ///   first. A nil window stays nil (an absent extra is simply omitted);
+    ///   nothing is coerced to 0.
     /// - `utilization` and `resetsAt` are copied through unchanged.
     /// - `fetchedAt` is passed through (drives the "Updated HH:MM" line).
     /// - Claude is always `.live`, provider `.claude`, and has no `planType`.
@@ -137,15 +177,46 @@ extension ProviderUsageSnapshot {
             return UsageWindow(id: id, title: title, utilization: w.utilization,
                                windowMinutes: minutes, resetsAt: w.resetsAt)
         }
-        let opus = map(s.sevenDayOpus, id: "opus", title: "Weekly · Opus", minutes: 10080)
-        let sonnet = map(s.sevenDaySonnet, id: "sonnet", title: "Weekly · Sonnet", minutes: 10080)
         self.init(
             provider: .claude,
             primary: map(s.fiveHour, id: "primary", title: "5-hour", minutes: 300),
             secondary: map(s.sevenDay, id: "secondary", title: "Weekly", minutes: 10080),
-            extras: [opus, sonnet].compactMap { $0 },
+            extras: Self.scopedWindows(s.scoped),
             freshness: .live,
             fetchedAt: s.fetchedAt,
             planType: nil)
+    }
+
+    /// Scoped caps → `extras`, keeping the snapshot's worst-first order.
+    ///
+    /// Ids must be unique — `extra(_:)` returns the FIRST match, so a collision
+    /// would silently shadow a real cap. The server's model id is preferred;
+    /// failing that the display name is slugged, and duplicates take an ordinal
+    /// suffix assigned over the already-sorted list, never over the order the
+    /// server happened to send. A payload reshuffle must not change which id a
+    /// given cap carries.
+    static func scopedWindows(_ scoped: [ScopedLimit]) -> [UsageWindow] {
+        var used = Set<String>()
+        return scoped.enumerated().map { i, s in
+            var id = s.modelID ?? slug(s.modelName)
+            if id.isEmpty { id = "scoped-\(i)" }
+            if used.contains(id) {
+                var n = 2
+                while used.contains("\(id)-\(n)") { n += 1 }
+                id = "\(id)-\(n)"
+            }
+            used.insert(id)
+            return UsageWindow(id: id, title: "Weekly · \(s.modelName)",
+                               utilization: s.utilization, windowMinutes: 10080,
+                               resetsAt: s.resetsAt)
+        }
+    }
+
+    /// Lowercased, alphanumerics kept, everything else collapsed to "-".
+    private static func slug(_ name: String) -> String {
+        let mapped = name.lowercased().map { ch -> Character in
+            ch.isLetter || ch.isNumber ? ch : "-"
+        }
+        return String(mapped).split(separator: "-").joined(separator: "-")
     }
 }

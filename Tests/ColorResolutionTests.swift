@@ -73,8 +73,21 @@ final class ColorResolutionTests: XCTestCase {
     func testBrandBelowCapIsProviderAccent() {
         // Identity: color() returns the very same static accent instance.
         XCTAssertTrue(StatusRenderer.color(50, .brand, provider: .claude) === StatusRenderer.claudeCoral)
-        XCTAssertTrue(StatusRenderer.color(89.9, .brand, provider: .claude) === StatusRenderer.claudeCoral)
+        XCTAssertTrue(StatusRenderer.color(89.4, .brand, provider: .claude) === StatusRenderer.claudeCoral)
         XCTAssertTrue(StatusRenderer.color(50, .brand, provider: .codex) === StatusRenderer.codexTeal)
+    }
+
+    /// The threshold is evaluated on the value the UI PRINTS, not the raw double.
+    /// 89.6 renders as "90%", so leaving it coral would have the glyph and the
+    /// number contradict each other; 89.4 renders as "89%" and stays calm.
+    func testSeverityFollowsTheDisplayedPercentage() {
+        XCTAssertEqual(StatusRenderer.color(89.6, .brand, provider: .claude), .systemRed)
+        XCTAssertTrue(StatusRenderer.color(89.4, .brand, provider: .claude) === StatusRenderer.claudeCoral)
+        XCTAssertEqual(StatusRenderer.color(89.5, .thresholds), .systemRed)
+        XCTAssertEqual(StatusRenderer.color(69.5, .thresholds), .systemOrange)
+        XCTAssertEqual(StatusRenderer.color(69.4, .thresholds), .labelColor)
+        XCTAssertTrue(Severity.isCritical(89.6))
+        XCTAssertFalse(Severity.isCritical(89.4))
     }
 
     func testBrandDefaultProviderIsClaude() {

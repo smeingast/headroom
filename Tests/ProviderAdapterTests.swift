@@ -10,14 +10,19 @@ final class ProviderAdapterTests: XCTestCase {
     private let fiveReset = utcDate(2026, 1, 2, 14, 0)
     private let weekReset = utcDate(2026, 1, 9, 3, 0)
 
+    /// One model-scoped cap as the endpoint's `limits[]` reports it.
+    private func cap(_ name: String, _ util: Double, reset: Date?) -> ScopedLimit {
+        ScopedLimit(modelID: nil, modelName: name, utilization: util,
+                    resetsAt: reset, severity: nil, isActive: false)
+    }
+
     // MARK: - Adapter presence + values
 
     func testFullSnapshotMapsEveryWindow() {
         let s = UsageSnapshot(
             fiveHour: LimitWindow(utilization: 42, resetsAt: fiveReset),
             sevenDay: LimitWindow(utilization: 61, resetsAt: weekReset),
-            sevenDayOpus: LimitWindow(utilization: 12, resetsAt: weekReset),
-            sevenDaySonnet: LimitWindow(utilization: 8, resetsAt: weekReset),
+            scoped: [cap("Opus", 12, reset: weekReset), cap("Sonnet", 8, reset: weekReset)],
             fetchedAt: fetched)
         let p = ProviderUsageSnapshot(claude: s)
 
@@ -33,8 +38,9 @@ final class ProviderAdapterTests: XCTestCase {
         XCTAssertEqual(p.secondary?.utilization, 61)
         XCTAssertEqual(p.secondary?.resetsAt, weekReset)
 
-        // Extras present in exactly the opus-then-sonnet order, keyed by id.
+        // Extras keyed by a slug of the model name, worst-first.
         XCTAssertEqual(p.extras.map(\.id), ["opus", "sonnet"])
+        XCTAssertEqual(p.extras.map(\.title), ["Weekly · Opus", "Weekly · Sonnet"])
         XCTAssertEqual(p.extra("opus")?.utilization, 12)
         XCTAssertEqual(p.extra("sonnet")?.utilization, 8)
         XCTAssertEqual(p.extra("opus")?.resetsAt, weekReset)
@@ -44,8 +50,7 @@ final class ProviderAdapterTests: XCTestCase {
         let s = UsageSnapshot(
             fiveHour: LimitWindow(utilization: 42, resetsAt: fiveReset),
             sevenDay: nil,
-            sevenDayOpus: LimitWindow(utilization: 12, resetsAt: weekReset),
-            sevenDaySonnet: LimitWindow(utilization: 8, resetsAt: weekReset),
+            scoped: [cap("Opus", 12, reset: weekReset), cap("Sonnet", 8, reset: weekReset)],
             fetchedAt: fetched)
         let p = ProviderUsageSnapshot(claude: s)
         XCTAssertNotNil(p.primary)
@@ -57,8 +62,7 @@ final class ProviderAdapterTests: XCTestCase {
         let s = UsageSnapshot(
             fiveHour: LimitWindow(utilization: 42, resetsAt: fiveReset),
             sevenDay: LimitWindow(utilization: 61, resetsAt: weekReset),
-            sevenDayOpus: nil,
-            sevenDaySonnet: nil,
+            scoped: [],
             fetchedAt: fetched)
         let p = ProviderUsageSnapshot(claude: s)
         XCTAssertNotNil(p.primary)
@@ -72,8 +76,7 @@ final class ProviderAdapterTests: XCTestCase {
         let s = UsageSnapshot(
             fiveHour: nil,
             sevenDay: nil,
-            sevenDayOpus: LimitWindow(utilization: 12, resetsAt: weekReset),
-            sevenDaySonnet: nil,
+            scoped: [cap("Opus", 12, reset: weekReset)],
             fetchedAt: fetched)
         let p = ProviderUsageSnapshot(claude: s)
         XCTAssertNil(p.primary)                         // fiveHour nil -> primary nil
@@ -85,8 +88,7 @@ final class ProviderAdapterTests: XCTestCase {
         let s = UsageSnapshot(
             fiveHour: LimitWindow(utilization: 5, resetsAt: nil),
             sevenDay: nil,
-            sevenDayOpus: nil,
-            sevenDaySonnet: LimitWindow(utilization: 8, resetsAt: weekReset),
+            scoped: [cap("Sonnet", 8, reset: weekReset)],
             fetchedAt: fetched)
         let p = ProviderUsageSnapshot(claude: s)
         XCTAssertEqual(p.extras.map(\.id), ["sonnet"])
@@ -99,7 +101,7 @@ final class ProviderAdapterTests: XCTestCase {
         let s = UsageSnapshot(
             fiveHour: LimitWindow(utilization: 137.5, resetsAt: fiveReset),
             sevenDay: LimitWindow(utilization: 0, resetsAt: weekReset),
-            sevenDayOpus: nil, sevenDaySonnet: nil, fetchedAt: fetched)
+            scoped: [], fetchedAt: fetched)
         let p = ProviderUsageSnapshot(claude: s)
         XCTAssertEqual(p.primary?.utilization, 137.5)
         XCTAssertEqual(p.secondary?.utilization, 0)     // a genuine 0, still present

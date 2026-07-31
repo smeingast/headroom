@@ -145,7 +145,7 @@ final class GoldenRenderTests: XCTestCase {
         let usage = UsageSnapshot(
             fiveHour: LimitWindow(utilization: 42, resetsAt: fr),
             sevenDay: LimitWindow(utilization: 61, resetsAt: wr),
-            sevenDayOpus: nil, sevenDaySonnet: nil, fetchedAt: fetched)
+            scoped: [], fetchedAt: fetched)
         let hs = AppDelegate.historySample(from: ProviderUsageSnapshot(claude: usage))
         XCTAssertEqual(hs.t, fetched)
         XCTAssertEqual(hs.five, 42)
