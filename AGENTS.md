@@ -60,6 +60,10 @@ deliberately; their README records the new baseline and the cell-by-cell proof
 that only the weekly arc moved. Bundle id stays
 `eu.smeingast.claude-menubar-usage` unless a migration is deliberately built:
 it keys Application Support, defaults, the Keychain ACL, and the login item.
+v0.12.1 (2026-09-24) follows Claude Code 2.1.281 to
+`platform.claude.com/v1/oauth/token` for refresh, routes the panel state
+through `Severity` too, shows Codex's `prolite` plan as "pro lite", and
+re-baselines the `percentages` goldens for macOS 27's text rasterizer.
 
 ## Sync hygiene (Stefan, 2026-09-05; 2026-09-24) — nothing generated lives inside this repo
 
