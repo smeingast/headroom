@@ -98,6 +98,41 @@ final class ProviderStateTests: XCTestCase {
         XCTAssertEqual(d.msg, "Red zone \u{00B7} 7% headroom \u{00B7} resets 12:38.")
     }
 
+    /// 89.6 prints as "90%", so it must be red, not watch: panel state and ring
+    /// color share `Severity`, which judges the displayed (rounded) value.
+    func testCodexRedJudgedOnDisplayedValue() {
+        let d = ProviderState.deriveCodex(
+            result: codexResult(five: 89.6, week: 58,
+                                fiveReset: utcDate(2026, 1, 2, 12, 38),
+                                weekReset: weekFuture,
+                                observed: utcDate(2026, 1, 2, 11, 59)),
+            forecast: nil, now: now, hm: hm())
+        XCTAssertEqual(d.kind, .red)
+        XCTAssertEqual(d.msg, "Red zone \u{00B7} 10% headroom \u{00B7} resets 12:38.")
+    }
+
+    func testClaudeSeverityJudgedOnDisplayedValue() {
+        func kind(_ five: Double) -> ClaudeStateKind {
+            ProviderState.deriveClaude(
+                five: five, week: 20, fiveResetsAt: utcDate(2026, 1, 2, 14, 0),
+                weekResetsAt: weekFuture, signedOut: false, staleError: false,
+                observedAt: now, forecast: nil, now: now, hm: hm()).kind
+        }
+        XCTAssertEqual(kind(89.6), .red)
+        XCTAssertEqual(kind(89.4), .watch)
+        XCTAssertEqual(kind(69.5), .watch)
+        XCTAssertEqual(kind(69.4), .normal)
+    }
+
+    func testCodexPlanChipLabel() {
+        XCTAssertEqual(PanelChip.planLabel("plus"), "plus")
+        XCTAssertEqual(PanelChip.planLabel("prolite"), "pro lite")
+        XCTAssertEqual(PanelChip.planLabel("edu_plus"), "edu plus")
+        XCTAssertNil(PanelChip.planLabel("unknown"))
+        XCTAssertNil(PanelChip.planLabel(""))
+        XCTAssertNil(PanelChip.planLabel(nil))
+    }
+
     func testCodexPace() {
         let d = ProviderState.deriveCodex(
             result: codexResult(five: 64, week: 23,

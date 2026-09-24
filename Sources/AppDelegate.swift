@@ -816,7 +816,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             five: five,
             week: snapshot?.secondary?.utilization,
             projected: forecast?.projected,
-            fiveIsRed: (five ?? 0) >= 90,
+            fiveIsRed: Severity.isCritical(five ?? 0),
             fiveResetAbs: resetsAt.map { "resets \(Self.dailyResetFormatter.string(from: $0))" },
             fiveResetRel: resetsAt.map { "in \(Self.rel($0.timeIntervalSince(now)))" },
             weekResetAbs: snapshot?.secondary?.resetsAt.map { "resets \(Self.weeklyResetFormatter.string(from: $0))" },

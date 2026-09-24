@@ -176,14 +176,14 @@ enum ProviderState {
 
         let f = five ?? 0
         let crosses = forecast?.crosses ?? false
-        let isRed = !signedOut && five != nil && f >= 90
+        let isRed = !signedOut && five != nil && Severity.isCritical(f)
 
         let kind: ClaudeStateKind = {
             if signedOut { return .signedOut }
             if staleError { return .stale }
             if isRed { return .red }
             if crosses { return .pace }
-            if f >= 70 { return .watch }
+            if Severity.isWarning(f) { return .watch }
             return .normal
         }()
 
@@ -308,12 +308,12 @@ enum ProviderState {
         let projFive: Double? = forecastActive ? forecast?.projected : nil
 
         let f = head ?? 0
-        let isRed = !inferredHead && f >= 90
+        let isRed = !inferredHead && Severity.isCritical(f)
         let kind: CodexStateKind = {
             if inferredHead { return .inferredZero }
             if isRed { return .red }
             if crosses { return .pace }
-            if f >= 70 { return .watch }
+            if Severity.isWarning(f) { return .watch }
             return .normal
         }()
         let aged = !fresh && !inferredHead

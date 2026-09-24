@@ -120,6 +120,19 @@ enum PanelRings {
 /// Small pill/chip painters shared by the tag row and strip. Each returns the drawn
 /// width so callers can lay chips left-to-right.
 enum PanelChip {
+    /// Codex's `plan_type` wire id as chip text. Most ids already read as words
+    /// ("plus", "pro"); `prolite` does not, and the CLI's own `unknown` is not a
+    /// plan worth a chip. Anything unmapped passes through with `_` as spaces,
+    /// so a plan OpenAI adds later still shows instead of vanishing.
+    static func planLabel(_ wire: String?) -> String? {
+        guard let wire, !wire.isEmpty, wire != "unknown" else { return nil }
+        switch wire {
+        case "prolite": return "pro lite"
+        case "self_serve_business_prolite": return "business pro lite"
+        default: return wire.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
     /// The width `draw` will occupy, WITHOUT drawing. The chip rows measure against
     /// the age line's left edge before committing to a chip (amendment 21), so the
     /// width math must live in one place and stay identical to `draw`'s.
@@ -224,7 +237,7 @@ final class TagRowView: NSView {
                                 fill: accent.withAlphaComponent(0.14), textColor: accent, kern: 0.4)
             x += 5
         }
-        if let plan = m.planType, !plan.isEmpty {
+        if let plan = PanelChip.planLabel(m.planType) {
             let planFont = NSFont.systemFont(ofSize: 10, weight: .semibold)
             if x + PanelChip.width(plan, font: planFont) <= ageLeft - clearance {
                 x += PanelChip.draw(plan, at: x, midY: midY, font: planFont,
@@ -465,7 +478,7 @@ final class StripView: NSView {
                                  font: provFont, fill: nil, textColor: accent, kern: 0.4)
             cx += 4
         }
-        if let plan = m.planType, !plan.isEmpty {
+        if let plan = PanelChip.planLabel(m.planType) {
             let planFont = NSFont.systemFont(ofSize: 9.5, weight: .semibold)
             if cx + PanelChip.width(plan, font: planFont) <= ageLeft - clearance {
                 cx += PanelChip.draw(plan, at: cx, midY: chipMidY,
