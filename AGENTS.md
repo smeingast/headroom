@@ -23,16 +23,14 @@ is reconstructed READ-ONLY from `~/.codex/sessions` rollout logs (never
 - The installed app in /Applications and dev builds in `~/Offline/headroom/build/app/` share the
   bundle id; a single-instance guard means you must quit one to run the other.
   Restore the installed app after manual checks.
-- `design/` is gitignored by convention (design records, review archives).
 - Rollout file/dir names are LOCAL time, timestamps UTC: order by mtime only.
 
 ## Status
 
-Codex support is complete; the effort's records (package contract, plan,
-amendments, review archives) live under `design/codex-support/`. Shipped as
+Codex support is complete. Shipped as
 Headroom v0.9 (2026-07-12): in-app rebrand, README rewrite, notarized release
 on GitHub. v0.10 (2026-07-12) moved all options into a tabbed Settings window
-(`Sources/SettingsWindow.swift`, records under `design/settings-window/`),
+(`Sources/SettingsWindow.swift`),
 added the About tab, removed the menu-bar corner pip, and made the graph
 projection follow the series ink. v0.10.1 (2026-07-13) keys Codex windows by
 `window_minutes` instead of their `primary`/`secondary` position: OpenAI moved
@@ -40,15 +38,14 @@ the weekly window into `primary` and dropped `secondary` for some accounts on
 2026-07-12, so the near-term slot is now OPTIONAL everywhere (single ring, sole
 value promoted to the headline, severity and forecast keyed on the window that
 exists). v0.11 (2026-07-13) adds the in-app updater
-(`Sources/UpdateChecker.swift`, records under `design/update-mechanism/`):
+(`Sources/UpdateChecker.swift`):
 daily GitHub releases check, verified in-place install (zip preflight,
 Developer ID requirement, spctl gate, Applications-folder eligibility) and
 relaunch; release invariants live in README's maintainer section, and
 `tools/update_probe.swift` exercises the real verify/swap chain against a
-scratch bundle. v0.12 (2026-07-31) adds Claude's model-scoped weekly caps
-(`design/claude-scoped-limits/plan.md`): the usage endpoint now reports them in
-a `limits[]` array while the legacy `seven_day_opus` / `_sonnet` /
-`_omelette` fields sit null, so an account could be 2 points from a Fable
+scratch bundle. v0.12 (2026-07-31) adds Claude's model-scoped weekly caps:
+the usage endpoint now reports them in a `limits[]` array while the legacy
+`seven_day_opus` / `_sonnet` / `_omelette` fields sit null, so an account could be 2 points from a Fable
 block while the app showed a calm weekly 82%. Caps become
 `ProviderUsageSnapshot.extras` (worst-first, ids from the model name), the menu
 rows are a dynamic pool, and the weekly ring gained an OPACITY channel:
