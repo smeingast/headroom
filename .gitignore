@@ -1,5 +1,5 @@
 # ───── Build output ─────
-# build/ holds the .app bundle produced by ./build.sh
+# Everything builds under ~/Offline/headroom/; these only guard against strays.
 build/
 DerivedData/
 *.o
@@ -27,6 +27,10 @@ DerivedData/
 .DocumentRevisions-V100
 .TemporaryItems
 .VolumeIcon.icns
+
+# ───── Resilio Sync temp/state files (the repo lives in a synced tree) ─────
+*.rsls
+*.rslsc
 
 # ───── Editors / tooling ─────
 *.swp

@@ -7,7 +7,7 @@ import Foundation
 // app or relaunching anything. Point it at a copy of Headroom.app inside a
 // scratch directory named "Applications" for the success path.
 //
-// Build: swiftc -o /tmp/update_probe Sources/UpdateChecker.swift tools/update_probe.swift
+// Build: swiftc -o ~/Offline/headroom/build/tools/update_probe Sources/UpdateChecker.swift tools/update_probe.swift
 // Usage: update_probe <zip> <bundle-to-replace> <running-version> <tag>
 
 @main

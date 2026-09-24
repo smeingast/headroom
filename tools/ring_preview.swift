@@ -2,8 +2,8 @@
 // REAL StatusRenderer, at the true 18 pt menu-bar size and enlarged, so the
 // v0.12 opacity cue can be judged before the render goldens are regenerated.
 //
-//   swiftc -o /tmp/ring_preview tools/ring_preview.swift Sources/StatusRenderer.swift \
-//          Sources/Providers.swift Sources/Forecast.swift && /tmp/ring_preview out.png
+//   swiftc -o ~/Offline/headroom/build/tools/ring_preview tools/ring_preview.swift Sources/StatusRenderer.swift \
+//          Sources/Providers.swift Sources/Forecast.swift && ~/Offline/headroom/build/tools/ring_preview out.png
 //
 // Screen capture needs a permission this environment does not have; this draws
 // the same pixels the menu bar would, minus its vibrancy.

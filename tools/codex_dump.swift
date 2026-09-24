@@ -15,9 +15,9 @@
 //       Sources/CodexUsageClient.swift Sources/CodexSessionsClient.swift \
 //       Sources/Providers.swift Sources/JSONLBackscan.swift \
 //       Sources/UsageClient.swift Sources/Keychain.swift \
-//       -o /tmp/codex_dump && /tmp/codex_dump [ISO8601-after-date]
+//       -o ~/Offline/headroom/build/tools/codex_dump && ~/Offline/headroom/build/tools/codex_dump [ISO8601-after-date]
 //
-// Example: /tmp/codex_dump 2026-07-11T00:00:00Z
+// Example: ~/Offline/headroom/build/tools/codex_dump 2026-07-11T00:00:00Z
 
 import Foundation
 

@@ -11,7 +11,7 @@ is reconstructed READ-ONLY from `~/.codex/sessions` rollout logs (never
   That glob compiles EVERY file under `Sources/` into the app: keep them
   dependency-free and plain-swiftc-safe; fixtures and helpers go under
   `Tests/`, one-shot harnesses under `tools/`.
-- `swift test --scratch-path ~/Build/headroom/spm`: unit gate via `Package.swift`
+- `swift test --scratch-path ~/Offline/headroom/build/spm`: unit gate via `Package.swift`
   (Sources minus `main.swift`). Never a bare `swift test` — it writes `.build/`
   into the synced tree (see Sync hygiene).
   Includes pixel-parity corpora under `Tests/Fixtures/render-goldens/` that
@@ -20,7 +20,7 @@ is reconstructed READ-ONLY from `~/.codex/sessions` rollout logs (never
 ## Conventions and traps
 
 - Comments explain WHY (constraints, reasoning), never what the next line does.
-- The installed app in /Applications and dev builds in `build/` share the
+- The installed app in /Applications and dev builds in `~/Offline/headroom/build/app/` share the
   bundle id; a single-instance guard means you must quit one to run the other.
   Restore the installed app after manual checks.
 - `design/` is gitignored by convention (design records, review archives).
@@ -64,23 +64,28 @@ that only the weekly arc moved. Bundle id stays
 `eu.smeingast.claude-menubar-usage` unless a migration is deliberately built:
 it keys Application Support, defaults, the Keychain ACL, and the login item.
 
-## Sync hygiene (Stefan, 2026-09-05) — nothing generated lives inside this repo
+## Sync hygiene (Stefan, 2026-09-05; 2026-09-24) — nothing generated lives inside this repo
 
 This repo sits in the Resilio-synced tree (`~/Cloud` = `/Volumes/CargoBay/Sync`);
 every file written here is replicated to capella, spica and the other Macs. On
 2026-09-05 build output and Claude Code worktrees inside `Projects/Claude/*` locked
 capella's Resilio at 100 % of a core for two days; a stale `.build/` here (667 MB,
-5 716 files) was part of it and was removed.
+5 716 files) was part of it and was removed. Everything generated lives under
+`~/Offline/headroom/`, the `~/Offline/<project>/` convention every project on
+this Mac shares.
 
 - **No worktrees in the repo.** Never let an agent tool create a worktree inside
   this tree (tool-specific rules: `CLAUDE.md`). A separate checkout goes to
-  `~/Worktrees/headroom/<name>` via `git worktree add`.
-- **No build output in the repo.** SwiftPM only with
-  `--scratch-path ~/Build/headroom/spm`; `.build/` and `DerivedData/` must not
-  exist. `./build.sh` writing its 12 MB app bundle to `build/` is tolerated,
-  but Resilio can drop `*.rsls` temp files into the fresh bundle and break
-  signing; `HEADROOM_BUILD_DIR=~/Build/headroom/app ./build.sh` builds out of tree.
-- **Session start:** `ls -d .claude/worktrees .build DerivedData 2>/dev/null` —
+  `~/Offline/headroom/worktrees/<name>` via `git worktree add`.
+- **No build output in the repo.** `./build.sh` writes to
+  `~/Offline/headroom/build/app/` (never `build/`: Resilio also drops `*.rsls`
+  temp files into a fresh bundle there and codesign rejects it). SwiftPM only
+  with `--scratch-path ~/Offline/headroom/build/spm`; one-shot `tools/` binaries
+  go to `~/Offline/headroom/build/tools/`. sourcekit-lsp (Claude Code's code
+  indexer) would write `.build/index-build`: `.sourcekit-lsp/config.json` points
+  it at `~/Offline/headroom/build/lsp-index/`, keep that file.
+  `build/`, `.build/` and `DerivedData/` must not exist in the tree.
+- **Session start:** `ls -d .claude/worktrees build .build DerivedData 2>/dev/null` —
   delete anything listed before other work (it regenerates); worktrees are removed
   with `git worktree remove --force` + `git worktree prune` after rescuing any
   uncommitted work outside the tree.

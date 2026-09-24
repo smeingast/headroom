@@ -201,9 +201,12 @@ and notarized by Apple, so it opens with no Gatekeeper warning.
 Needs the Swift toolchain (Xcode, or Command Line Tools via `xcode-select --install`):
 
 ```sh
-./build.sh              # build/Headroom.app  (ad-hoc signed)
+./build.sh              # ~/Offline/headroom/build/app/Headroom.app  (ad-hoc signed)
 ./build.sh --install    # also copies to /Applications and clears quarantine
 ```
+
+Build output never lands in the checkout; set `HEADROOM_BUILD_DIR` to put it
+somewhere else.
 
 The result is a self-contained `.app` that uses only system frameworks. It is
 deliberately light: one status item and a roughly 5-minute poll (plus an
@@ -219,7 +222,8 @@ hardened runtime automatically. To produce and zip the notarized, stapled `.app`
 ```sh
 ./tools/notarize_setup.sh   # one-time: store Apple notary credentials in the keychain
 ./build.sh --notarize       # sign, submit to Apple, staple, verify
-ditto -c -k --keepParent "build/Headroom.app" "build/Headroom-vX.Y.zip"
+B=~/Offline/headroom/build/app
+ditto -c -k --keepParent "$B/Headroom.app" "$B/Headroom-vX.Y.zip"
 ```
 
 `build.sh` does not bundle the versioned zip itself, hence the `ditto` step.
@@ -295,7 +299,8 @@ tools/
 Tests/                       swift-test unit gate, including render-goldens (pixel parity)
 Package.swift                swift test manifest (Sources minus main.swift)
 build.sh                     Compile, bundle, sign, optionally notarize and install
-CLAUDE.md                    Build gates and conventions for contributors
+AGENTS.md                    Build gates and conventions for contributors (and agents)
+CLAUDE.md                    Imports AGENTS.md for Claude Code
 ```
 
 ## License
