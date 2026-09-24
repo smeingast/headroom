@@ -2,6 +2,7 @@
 # Builds "Headroom.app" (arm64, self-contained), signs it, and optionally notarizes.
 # Usage:
 #   ./build.sh                       # build into ./build/
+#   HEADROOM_BUILD_DIR=~/Build/headroom/app ./build.sh   # build outside the repo
 #   ./build.sh --install             # build, then copy to /Applications + clear quarantine
 #   ./build.sh --notarize            # build, hardened-runtime sign, notarize + staple
 #   ./build.sh --notarize --install  # …and install the stapled app
@@ -23,7 +24,10 @@ VERSION="${CLAUDE_USAGE_VERSION:-0.12}"
 # Monotonic build number from commit count (falls back to 1 outside a git checkout).
 BUILD_NUM="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
 
-BUILD="$ROOT/build"
+# The repo lives in a Resilio-synced tree; the sync client drops *.rsls temp files
+# into a freshly written bundle and codesign then rejects it. An out-of-tree
+# build dir sidesteps that race.
+BUILD="${HEADROOM_BUILD_DIR:-$ROOT/build}"
 APP="$BUILD/$APP_NAME.app"
 MACOS_DIR="$APP/Contents/MacOS"
 
