@@ -80,9 +80,9 @@ enum UsageError: Error, CustomStringConvertible {
 final class UsageClient {
     static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    static let tokenURL = URL(string: "https://console.anthropic.com/v1/oauth/token")!
+    static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
     static let betaHeader = "oauth-2025-04-20"
-    static let userAgent = "claude-cli/2.1.160 (external, cli)"
+    static let userAgent = "claude-cli/2.1.281 (external, cli)"
 
     private var creds: OAuthCredentials?
     // A rotated pair that hasn't reached the Keychain yet. Until it lands, a newly

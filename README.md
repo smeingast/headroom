@@ -41,7 +41,7 @@ only, and never to OpenAI at all.
 > undocumented, and liable to change or break without notice. The Codex side
 > reads undocumented local log formats and may break silently when the CLI
 > changes them. It reads your local Claude Code OAuth token from the Keychain,
-> sends requests only to `api.anthropic.com` and `console.anthropic.com`, and
+> sends requests only to `api.anthropic.com` and `platform.claude.com`, and
 > never reads `~/.codex/auth.json` or touches the network for Codex. Use at your
 > own risk.
 
@@ -83,7 +83,7 @@ in your login Keychain. The token is read silently and cached in memory. It is
 refreshed only as a last resort and never while any Claude Code process is
 running: the refresh token is single-use, so spending it would log a live
 Claude Code out. While one runs, the app adopts whatever fresh token Claude Code
-writes. Requests go only to `api.anthropic.com` and `console.anthropic.com`.
+writes. Requests go only to `api.anthropic.com` and `platform.claude.com`.
 
 **Codex** has no usage API and no auth we touch. Instead the app reconstructs a
 snapshot strictly read-only from the point-in-time server values Codex appends
