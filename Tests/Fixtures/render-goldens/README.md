@@ -5,12 +5,12 @@ drift fails the build.
 
 ## Baseline history
 
-The corpus was captured twice, both times deliberately:
+The corpus was captured three times, each time deliberately:
 
 1. **Pre-package-4a** (`StatusRenderer.swift` at commit `00c7d6a`, "Codex
    sessions: interactive rows + exec summary"), to prove package 4a's new
    rendering parameters were dormant.
-2. **v0.12, scoped model caps** — the current baseline. The weekly ring's
+2. **v0.12, scoped model caps.** The weekly ring's
    resting alpha in the MENU-BAR glyph moved from 1.0 to
    `StatusRenderer.weeklyCalmAlpha` (0.5), matching what the panel had drawn
    since v0.8 and freeing opacity to signal "a window inside this week is at the
@@ -22,6 +22,14 @@ The corpus was captured twice, both times deliberately:
    week moved — which is the proof that only the weekly arc changed. Re-verify
    that arithmetic before ever regenerating again: a drift count that is not
    explained cell-for-cell is a bug, not a baseline.
+3. **macOS 27 (26A428), 2026-09-24** — the current baseline. No renderer code
+   changed; the OS's text rasterizer did. Exactly **80 of 320** cells moved:
+   every `percentages` cell (8 values x 5 modes x 2 appearances) and nothing
+   else, so no ring, bar or color path moved. Worst channel drift was 51/255, on
+   glyph-edge anti-aliasing; a 6x blow-up of `percentages_thresholds_f69_w55`
+   before/after shows the same string, same position, same weight. Two
+   captures were byte-identical (`diff -rq`). Goldens are now macOS-27 pixels:
+   on an older macOS the `percentages` cells will fail the same way in reverse.
 
 The package-4a dormancy claim below still describes what the corpus tests; only
 the pixels it compares against have moved.
@@ -67,7 +75,8 @@ values).
 
 ## Regenerating (only intentionally, from the pinned renderer)
 
-    CAPTURE_RENDER_GOLDENS=1 swift test --filter RenderGoldenCaptureTests
+    CAPTURE_RENDER_GOLDENS=1 swift test --scratch-path ~/Offline/headroom/build/spm \
+        --filter RenderGoldenCaptureTests
 
 An ordinary `swift test` **never** rewrites these (the capture test is skipped
 without the env var), so the parity test always compares new code against the
